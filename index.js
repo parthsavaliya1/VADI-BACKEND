@@ -8,6 +8,9 @@ connectDB();
 const productRoutes = require("./routes/productRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
 const authRoutes = require("./routes/authRoutes");
+const addressRoute = require("./routes/addressRoute");
+const orderRoute = require("./routes/orderRoute");
+const paymentRoute = require("./routes/paymentRoute");
 
 const app = express();
 app.use(cors());
@@ -16,6 +19,9 @@ app.use(express.json());
 app.use("/products", productRoutes);
 app.use("/categories", categoryRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/addresses", addressRoute);
+app.use("/orders", orderRoute);
+app.use("/payments", paymentRoute);
 
 app.get("/", (req, res) => {
   res.send("VADI Backend running 🚀");
