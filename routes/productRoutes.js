@@ -40,7 +40,7 @@ router.post("/", upload.single("image"), async (req, res) => {
 
       if (error) throw error;
 
-      const { data } = supabase.storage.from("uploads").getPublicUrl(fileName);
+      const { data } = supabase.storage.from("VADI").getPublicUrl(fileName);
 
       imageUrl = data.publicUrl;
     }
