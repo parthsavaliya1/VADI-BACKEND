@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const path = require("path");
 require("dotenv").config();
 
 const connectDB = require("./config/db");
@@ -13,8 +14,12 @@ const orderRoute = require("./routes/orderRoute");
 const paymentRoute = require("./routes/paymentRoute");
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
+
+// 🔥 serve uploads FIRST
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.use("/products", productRoutes);
 app.use("/categories", categoryRoutes);
@@ -22,7 +27,6 @@ app.use("/api/auth", authRoutes);
 app.use("/addresses", addressRoute);
 app.use("/orders", orderRoute);
 app.use("/payments", paymentRoute);
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.get("/", (req, res) => {
   res.send("VADI Backend running 🚀");
