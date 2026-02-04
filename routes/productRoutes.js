@@ -61,7 +61,17 @@ router.post("/", upload.single("image"), async (req, res) => {
     console.log("Body:", req.body);
     console.log("File:", req.file);
 
-    const { name, price, unit, category, stock } = req.body;
+    const {
+      name,
+      price,
+      unit,
+      category,
+      stock,
+      discount,
+      featured,
+      trending,
+      bestDeal,
+    } = req.body;
 
     // Validation
     if (!name || !name.trim()) {
@@ -86,6 +96,16 @@ router.post("/", upload.single("image"), async (req, res) => {
         .json({ error: "Stock must be a non-negative number" });
     }
 
+    // Validate discount
+    if (discount !== undefined) {
+      const discountNum = Number(discount);
+      if (isNaN(discountNum) || discountNum < 0 || discountNum > 100) {
+        return res
+          .status(400)
+          .json({ error: "Discount must be between 0 and 100" });
+      }
+    }
+
     // Create product
     const product = await Product.create({
       name: name.trim(),
@@ -94,6 +114,10 @@ router.post("/", upload.single("image"), async (req, res) => {
       category: category.trim(),
       stock: stock ? Number(stock) : 0,
       image: req.file ? getImageUrl(req, req.file.filename) : null,
+      discount: discount ? Number(discount) : 0,
+      featured: featured === "true" || featured === true,
+      trending: trending === "true" || trending === true,
+      bestDeal: bestDeal === "true" || bestDeal === true,
     });
 
     console.log("✅ Product created successfully:", product._id);
@@ -117,13 +141,30 @@ router.post("/", upload.single("image"), async (req, res) => {
 
 /**
  * ✅ GET PRODUCTS
- * GET /products?category=vegetables
+ * GET /products?category=vegetables&featured=true&trending=true&bestDeal=true
  */
 router.get("/", async (req, res) => {
   try {
-    const { category } = req.query;
+    const { category, featured, trending, bestDeal } = req.query;
 
-    const filter = category ? { category, isActive: true } : { isActive: true };
+    const filter = { isActive: true };
+
+    if (category) {
+      filter.category = category;
+    }
+
+    // Add filters for special sections
+    if (featured === "true") {
+      filter.featured = true;
+    }
+
+    if (trending === "true") {
+      filter.trending = true;
+    }
+
+    if (bestDeal === "true") {
+      filter.bestDeal = true;
+    }
 
     const products = await Product.find(filter).sort({
       createdAt: -1,
@@ -161,7 +202,17 @@ router.get("/:id", async (req, res) => {
  */
 router.put("/:id", upload.single("image"), async (req, res) => {
   try {
-    const { name, price, unit, category, stock } = req.body;
+    const {
+      name,
+      price,
+      unit,
+      category,
+      stock,
+      discount,
+      featured,
+      trending,
+      bestDeal,
+    } = req.body;
 
     const updateData = {};
 
@@ -170,7 +221,27 @@ router.put("/:id", upload.single("image"), async (req, res) => {
     if (unit) updateData.unit = unit.trim();
     if (category) updateData.category = category.trim();
     if (stock !== undefined) updateData.stock = Number(stock);
-    if (req.file) updateData.image = `/uploads/${req.file.filename}`;
+    if (req.file) updateData.image = getImageUrl(req, req.file.filename);
+
+    // Update new fields
+    if (discount !== undefined) {
+      const discountNum = Number(discount);
+      if (discountNum >= 0 && discountNum <= 100) {
+        updateData.discount = discountNum;
+      }
+    }
+
+    if (featured !== undefined) {
+      updateData.featured = featured === "true" || featured === true;
+    }
+
+    if (trending !== undefined) {
+      updateData.trending = trending === "true" || trending === true;
+    }
+
+    if (bestDeal !== undefined) {
+      updateData.bestDeal = bestDeal === "true" || bestDeal === true;
+    }
 
     const product = await Product.findByIdAndUpdate(req.params.id, updateData, {
       new: true,
@@ -211,6 +282,47 @@ router.delete("/:id", async (req, res) => {
     res.json({ message: "Product deleted successfully" });
   } catch (error) {
     console.error("Error deleting product:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * ✅ BULK UPDATE DEALS/FEATURED/TRENDING
+ * PATCH /products/bulk-update
+ * Body: { productIds: [], updates: { featured: true, trending: false } }
+ */
+router.patch("/bulk-update", async (req, res) => {
+  try {
+    const { productIds, updates } = req.body;
+
+    if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
+      return res.status(400).json({ error: "Product IDs array is required" });
+    }
+
+    if (!updates || typeof updates !== "object") {
+      return res.status(400).json({ error: "Updates object is required" });
+    }
+
+    const allowedUpdates = ["featured", "trending", "bestDeal", "discount"];
+    const updateData = {};
+
+    Object.keys(updates).forEach((key) => {
+      if (allowedUpdates.includes(key)) {
+        updateData[key] = updates[key];
+      }
+    });
+
+    const result = await Product.updateMany(
+      { _id: { $in: productIds } },
+      { $set: updateData },
+    );
+
+    res.json({
+      message: "Products updated successfully",
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (error) {
+    console.error("Error bulk updating products:", error);
     res.status(500).json({ error: error.message });
   }
 });
