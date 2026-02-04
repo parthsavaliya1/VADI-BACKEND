@@ -33,14 +33,16 @@ router.post("/", upload.single("image"), async (req, res) => {
         .slice(2)}-${req.file.originalname}`;
 
       const { error } = await supabase.storage
-        .from("uploads")
+        .from("VADI") // ✅ FIXED
         .upload(fileName, req.file.buffer, {
           contentType: req.file.mimetype,
         });
 
       if (error) throw error;
 
-      const { data } = supabase.storage.from("VADI").getPublicUrl(fileName);
+      const { data } = supabase.storage
+        .from("VADI") // ✅ SAME BUCKET
+        .getPublicUrl(fileName);
 
       imageUrl = data.publicUrl;
     }
