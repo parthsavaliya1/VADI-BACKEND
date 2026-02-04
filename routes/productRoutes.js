@@ -1,7 +1,7 @@
 const express = require("express");
 const Product = require("../models/Product");
 const upload = require("../middleware/upload");
-const supabase = require("../utils/supabase");
+const supabase = require("../config/supabase");
 
 const router = express.Router();
 
