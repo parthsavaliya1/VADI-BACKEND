@@ -6,6 +6,10 @@ const fs = require("fs");
 
 const router = express.Router();
 
+const getImageUrl = (req, filename) => {
+  return `${req.protocol}://${req.get("host")}/uploads/${filename}`;
+};
+
 /* =======================
    ENSURE UPLOADS DIRECTORY EXISTS
 ======================= */
@@ -89,7 +93,7 @@ router.post("/", upload.single("image"), async (req, res) => {
       unit: unit.trim(),
       category: category.trim(),
       stock: stock ? Number(stock) : 0,
-      image: req.file ? `/uploads/${req.file.filename}` : null,
+      image: req.file ? getImageUrl(req, req.file.filename) : null,
     });
 
     console.log("✅ Product created successfully:", product._id);
