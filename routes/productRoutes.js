@@ -1,54 +1,9 @@
 const express = require("express");
 const Product = require("../models/Product");
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
+const upload = require("../middlewares/upload");
+const supabase = require("../utils/supabase");
 
 const router = express.Router();
-
-const getImageUrl = (req, filename) => {
-  return `${req.protocol}://${req.get("host")}/uploads/${filename}`;
-};
-
-/* =======================
-   ENSURE UPLOADS DIRECTORY EXISTS
-======================= */
-const uploadsDir = path.join(__dirname, "..", "uploads");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log("✅ Created uploads directory");
-}
-
-/* =======================
-   MULTER CONFIG
-======================= */
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, uniqueName + ext);
-  },
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter(req, file, cb) {
-    const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(
-      path.extname(file.originalname).toLowerCase(),
-    );
-    const mimetype = allowedTypes.test(file.mimetype);
-
-    if (mimetype && extname) {
-      return cb(null, true);
-    }
-    cb(new Error("Only image files (JPEG, PNG, GIF, WEBP) are allowed"));
-  },
-});
 
 /**
  * ✅ CREATE PRODUCT (ADMIN)
@@ -57,10 +12,6 @@ const upload = multer({
  */
 router.post("/", upload.single("image"), async (req, res) => {
   try {
-    console.log("📦 Received product creation request");
-    console.log("Body:", req.body);
-    console.log("File:", req.file);
-
     const {
       name,
       price,
@@ -73,69 +24,44 @@ router.post("/", upload.single("image"), async (req, res) => {
       bestDeal,
     } = req.body;
 
-    // Validation
-    if (!name || !name.trim()) {
-      return res.status(400).json({ error: "Product name is required" });
+    let imageUrl = null;
+
+    // ✅ Upload to Supabase
+    if (req.file) {
+      const fileName = `products/${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}-${req.file.originalname}`;
+
+      const { error } = await supabase.storage
+        .from("uploads")
+        .upload(fileName, req.file.buffer, {
+          contentType: req.file.mimetype,
+        });
+
+      if (error) throw error;
+
+      const { data } = supabase.storage.from("uploads").getPublicUrl(fileName);
+
+      imageUrl = data.publicUrl;
     }
 
-    if (!price || isNaN(price) || Number(price) <= 0) {
-      return res.status(400).json({ error: "Valid price is required" });
-    }
-
-    if (!unit || !unit.trim()) {
-      return res.status(400).json({ error: "Unit is required" });
-    }
-
-    if (!category || !category.trim()) {
-      return res.status(400).json({ error: "Category is required" });
-    }
-
-    if (stock !== undefined && (isNaN(stock) || Number(stock) < 0)) {
-      return res
-        .status(400)
-        .json({ error: "Stock must be a non-negative number" });
-    }
-
-    // Validate discount
-    if (discount !== undefined) {
-      const discountNum = Number(discount);
-      if (isNaN(discountNum) || discountNum < 0 || discountNum > 100) {
-        return res
-          .status(400)
-          .json({ error: "Discount must be between 0 and 100" });
-      }
-    }
-
-    // Create product
     const product = await Product.create({
       name: name.trim(),
       price: Number(price),
       unit: unit.trim(),
       category: category.trim(),
       stock: stock ? Number(stock) : 0,
-      image: req.file ? getImageUrl(req, req.file.filename) : null,
+      image: imageUrl,
       discount: discount ? Number(discount) : 0,
-      featured: featured === "true" || featured === true,
-      trending: trending === "true" || trending === true,
-      bestDeal: bestDeal === "true" || bestDeal === true,
+      featured: featured === "true",
+      trending: trending === "true",
+      bestDeal: bestDeal === "true",
     });
 
-    console.log("✅ Product created successfully:", product._id);
     res.status(201).json(product);
   } catch (error) {
-    console.error("❌ Error creating product:", error);
-
-    // Delete uploaded file if product creation fails
-    if (req.file) {
-      fs.unlink(req.file.path, (err) => {
-        if (err) console.error("Error deleting file:", err);
-      });
-    }
-
-    res.status(400).json({
-      error: error.message || "Failed to create product",
-      details: process.env.NODE_ENV === "development" ? error.stack : undefined,
-    });
+    console.error("❌ Product error:", error);
+    res.status(400).json({ error: error.message });
   }
 });
 
@@ -221,7 +147,23 @@ router.put("/:id", upload.single("image"), async (req, res) => {
     if (unit) updateData.unit = unit.trim();
     if (category) updateData.category = category.trim();
     if (stock !== undefined) updateData.stock = Number(stock);
-    if (req.file) updateData.image = getImageUrl(req, req.file.filename);
+    if (req.file) {
+      const fileName = `products/${Date.now()}-${req.file.originalname}`;
+
+      const { error } = await supabase.storage
+        .from("uploads")
+        .upload(fileName, req.file.buffer, {
+          contentType: req.file.mimetype,
+        });
+
+      if (!error) {
+        const { data } = supabase.storage
+          .from("uploads")
+          .getPublicUrl(fileName);
+
+        updateData.image = data.publicUrl;
+      }
+    }
 
     // Update new fields
     if (discount !== undefined) {
@@ -269,14 +211,6 @@ router.delete("/:id", async (req, res) => {
 
     if (!product) {
       return res.status(404).json({ error: "Product not found" });
-    }
-
-    // Delete associated image file
-    if (product.image) {
-      const imagePath = path.join(__dirname, "..", product.image);
-      fs.unlink(imagePath, (err) => {
-        if (err) console.error("Error deleting image:", err);
-      });
     }
 
     res.json({ message: "Product deleted successfully" });
