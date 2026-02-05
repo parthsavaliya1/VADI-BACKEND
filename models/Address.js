@@ -6,15 +6,57 @@ const AddressSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      index: true,
     },
-    name: String, // Home / Office
-    addressLine: {
+
+    type: {
+      type: String,
+      enum: ["home", "work", "other"],
+      default: "home",
+    },
+
+    name: String, // display name
+
+    phone: {
       type: String,
       required: true,
     },
-    city: String,
-    state: String,
-    pincode: String,
+
+    addressLine1: {
+      type: String,
+      required: true,
+    },
+
+    addressLine2: String,
+
+    landmark: String,
+
+    city: {
+      type: String,
+      required: true,
+    },
+
+    state: {
+      type: String,
+      required: true,
+    },
+
+    pincode: {
+      type: String,
+      required: true,
+    },
+
+    location: {
+      type: {
+        type: String,
+        enum: ["Point"],
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number], // [lng, lat]
+      },
+    },
+
     isDefault: {
       type: Boolean,
       default: false,
@@ -22,5 +64,9 @@ const AddressSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
+// Indexes
+AddressSchema.index({ user: 1 });
+AddressSchema.index({ location: "2dsphere" });
 
 module.exports = mongoose.model("Address", AddressSchema);

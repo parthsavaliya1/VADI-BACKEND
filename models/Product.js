@@ -2,46 +2,115 @@ const mongoose = require("mongoose");
 
 const ProductSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    price: { type: Number, required: true },
-    unit: { type: String, required: true }, // kg / pcs
-    category: { type: String, required: true, index: true },
-    image: String,
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    description: {
+      type: String,
+      trim: true,
+    },
+
+    // Pricing
+    mrp: {
+      type: Number,
+      required: true,
+    },
+
+    price: {
+      type: Number,
+      required: true,
+    },
+
+    discount: {
+      type: Number,
+      default: 0, // percentage
+      min: 0,
+      max: 100,
+    },
+
+    unit: {
+      type: String,
+      required: true, // kg / pcs / litre
+    },
+
+    category: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Category",
+      required: true,
+      index: true,
+    },
+
+    // Images
+    image: String, // main image
+    images: [String], // multiple images
+
+    brand: {
+      type: String, // optional (farm name / vendor)
+    },
 
     stock: {
       type: Number,
-      required: true, // quantity available
-    },
-
-    // New fields for home page sections
-    discount: {
-      type: Number,
-      default: 0,
+      required: true,
       min: 0,
-      max: 100, // percentage (0-100)
     },
 
+    // Order quantity control
+    minOrderQty: {
+      type: Number,
+      default: 1,
+    },
+
+    maxOrderQty: {
+      type: Number,
+    },
+
+    // UI helpers
     featured: {
       type: Boolean,
-      default: false, // Shows in "Featured Products" section
+      default: false,
     },
 
     trending: {
       type: Boolean,
-      default: false, // Shows in "Trending Now" section
+      default: false,
     },
 
     bestDeal: {
       type: Boolean,
-      default: false, // Shows in "Best Deals" section
+      default: false,
     },
 
-    isActive: { type: Boolean, default: true },
+    deliveryTime: {
+      type: String, // "10 mins", "1 hour"
+    },
+
+    rating: {
+      type: Number,
+      default: 0,
+    },
+
+    reviewsCount: {
+      type: Number,
+      default: 0,
+    },
+
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
   },
   { timestamps: true },
 );
 
-// Index for faster queries on the new fields
-ProductSchema.index({ featured: 1, trending: 1, bestDeal: 1 });
+// Indexes for faster homepage queries
+ProductSchema.index({
+  featured: 1,
+  trending: 1,
+  bestDeal: 1,
+  category: 1,
+});
 
 module.exports = mongoose.model("Product", ProductSchema);
