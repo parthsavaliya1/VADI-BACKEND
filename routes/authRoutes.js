@@ -6,49 +6,48 @@ const router = express.Router();
 
 const ADMIN_PHONE = "+919909049699";
 
+const twilio = require("twilio");
+
+const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
+
 /**
  * ✅ SIGNUP
  * POST /api/auth/signup
  */
 router.post("/signup", async (req, res) => {
   try {
-    const { name, phone, password, dob, profileImage, role } = req.body;
+    const { name, phone, password, profileImage, role } = req.body;
 
-    // ✅ Validate
-    if (!name || !phone || !password || !dob) {
+    if (!name || !phone || !password) {
       return res.status(400).json({ error: "All fields are required" });
     }
 
-    // ✅ Normalize phone (safety)
     const normalizedPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
 
-    // ✅ Check existing user
-    const existing = await User.findOne({ phone: normalizedPhone });
-    if (existing) {
-      return res.status(400).json({ error: "User already exists" });
+    const user = await User.findOne({ phone: normalizedPhone });
+    if (!user) {
+      return res.status(400).json({ error: "OTP not verified" });
     }
 
-    // ✅ Hash password
+    if (!user.isPhoneVerified) {
+      return res.status(400).json({ error: "Phone not verified" });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // ✅ Decide role (BACKEND AUTHORITY)
     let finalRole = "user";
     if (normalizedPhone === ADMIN_PHONE && role === "admin") {
       finalRole = "admin";
     }
 
-    const user = await User.create({
-      name,
-      phone: normalizedPhone,
-      password: hashedPassword,
-      dob,
-      profileImage,
-      role: finalRole,
-    });
+    user.name = name;
+    user.password = hashedPassword;
+    user.profileImage = profileImage;
+    user.role = finalRole;
 
-    // ❌ Never send password
+    await user.save();
+
     const { password: _, ...safeUser } = user.toObject();
-
     res.status(201).json(safeUser);
   } catch (err) {
     console.error(err);
@@ -85,49 +84,79 @@ router.post("/login", async (req, res) => {
 });
 
 router.post("/send-otp", async (req, res) => {
-  const { phone } = req.body;
+  try {
+    const { phone } = req.body;
+    const normalizedPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
 
-  if (!phone) {
-    return res.status(400).json({ error: "Phone required" });
+    let user = await User.findOne({ phone: normalizedPhone });
+    if (!user) {
+      user = await User.create({ phone: normalizedPhone });
+    }
+
+    // 🔐 DO NOT regenerate OTP if still valid
+    if (user.otp && user.otpExpiresAt > new Date()) {
+      return res.json({ success: true, message: "OTP already sent" });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    user.otp = otp;
+    user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    await user.save();
+
+    await client.messages.create({
+      body: `Your VADI OTP is ${otp}. Valid for 5 minutes.`,
+      from: process.env.TWILIO_PHONE,
+      to: normalizedPhone,
+    });
+
+    console.log("✅ OTP sent:", otp);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ OTP send failed:", err);
+    res.status(500).json({ error: "Failed to send OTP" });
   }
-
-  let user = await User.findOne({ phone });
-
-  if (!user) {
-    user = await User.create({ phone });
-  }
-
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-  user.otp = otp;
-  user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
-  await user.save();
-
-  // 🔔 SEND SMS HERE (Twilio / MSG91)
-  console.log("OTP:", otp); // DEV ONLY
-
-  res.json({ success: true });
 });
 
 router.post("/verify-otp", async (req, res) => {
-  const { phone, otp } = req.body;
+  try {
+    const { phone, otp } = req.body;
 
-  const user = await User.findOne({ phone });
+    const normalizedPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
+    const user = await User.findOne({ phone: normalizedPhone });
 
-  if (!user || user.otp !== otp) {
-    return res.status(400).json({ error: "Invalid OTP" });
+    if (!user || !user.otp || !user.otpExpiresAt) {
+      return res.status(400).json({ error: "OTP not found. Request again." });
+    }
+
+    if (user.otpExpiresAt < new Date()) {
+      return res.status(400).json({ error: "OTP expired" });
+    }
+
+    if (String(user.otp) !== String(otp)) {
+      return res.status(400).json({ error: "Invalid OTP" });
+    }
+
+    user.otp = null;
+    user.otpExpiresAt = null;
+    user.isPhoneVerified = true;
+    await user.save();
+
+    // ✅ Return user data with signup status
+    const { password: _, ...safeUser } = user.toObject();
+    const isNewUser = !user.name || !user.password;
+
+    res.json({
+      success: true,
+      phone: normalizedPhone,
+      user: safeUser,
+      isNewUser,
+    });
+  } catch (err) {
+    console.error("Verify OTP failed:", err);
+    res.status(500).json({ error: "OTP verification failed" });
   }
-
-  if (user.otpExpiresAt < new Date()) {
-    return res.status(400).json({ error: "OTP expired" });
-  }
-
-  user.otp = null;
-  user.otpExpiresAt = null;
-  await user.save();
-
-  const { password, ...safeUser } = user.toObject();
-  res.json(safeUser);
 });
 
 module.exports = router;

@@ -50,10 +50,13 @@ const AddressSchema = new mongoose.Schema(
       type: {
         type: String,
         enum: ["Point"],
-        default: "Point",
       },
       coordinates: {
-        type: [Number], // [lng, lat]
+        type: [Number],
+        validate: {
+          validator: (v) => !v || v.length === 2,
+          message: "Coordinates must be [lng, lat]",
+        },
       },
     },
 
@@ -67,6 +70,10 @@ const AddressSchema = new mongoose.Schema(
 
 // Indexes
 AddressSchema.index({ user: 1 });
-AddressSchema.index({ location: "2dsphere" });
+
+// CRITICAL FIX: Use sparse index for location
+// This allows documents without location field to exist
+// Only documents WITH location will be indexed for geo queries
+AddressSchema.index({ location: "2dsphere" }, { sparse: true });
 
 module.exports = mongoose.model("Address", AddressSchema);
