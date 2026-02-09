@@ -4,15 +4,45 @@ const Address = require("../models/Address");
 const router = express.Router();
 
 /**
- * ✅ GET USER ADDRESSES
- * GET /addresses/:userId
+ * ✅ GET DEFAULT ADDRESS FOR USER
+ * GET /addresses/:userId/default
  */
-router.get("/:userId", async (req, res) => {
+router.get("/:userId/default", async (req, res) => {
   try {
-    const addresses = await Address.find({ user: req.params.userId }).sort({
-      isDefault: -1,
-      createdAt: -1,
+    const address = await Address.findOne({
+      user: req.params.userId,
+      isDefault: true,
     });
+
+    if (!address) {
+      return res.status(404).json({ error: "No default address found" });
+    }
+
+    res.json(address);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * ✅ GET ADDRESSES BY TYPE
+ * GET /addresses/:userId/type/:type
+ */
+router.get("/:userId/type/:type", async (req, res) => {
+  try {
+    const { userId, type } = req.params;
+
+    if (!["home", "work", "other"].includes(type)) {
+      return res.status(400).json({
+        error: "Invalid address type. Must be home, work, or other",
+      });
+    }
+
+    const addresses = await Address.find({
+      user: userId,
+      type: type,
+    }).sort({ isDefault: -1, createdAt: -1 });
+
     res.json(addresses);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -32,6 +62,55 @@ router.get("/single/:id", async (req, res) => {
     }
 
     res.json(address);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * ✅ FIND ADDRESSES NEAR LOCATION (GEO SEARCH)
+ * POST /addresses/nearby
+ * Body: { longitude, latitude, maxDistance }
+ */
+router.post("/nearby", async (req, res) => {
+  try {
+    const { longitude, latitude, maxDistance = 5000 } = req.body; // default 5km
+
+    if (!longitude || !latitude) {
+      return res.status(400).json({
+        error: "Please provide longitude and latitude",
+      });
+    }
+
+    const addresses = await Address.find({
+      location: {
+        $near: {
+          $geometry: {
+            type: "Point",
+            coordinates: [longitude, latitude],
+          },
+          $maxDistance: maxDistance, // in meters
+        },
+      },
+    });
+
+    res.json(addresses);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * ✅ GET USER ADDRESSES
+ * GET /addresses/:userId
+ */
+router.get("/:userId", async (req, res) => {
+  try {
+    const addresses = await Address.find({ user: req.params.userId }).sort({
+      isDefault: -1,
+      createdAt: -1,
+    });
+    res.json(addresses);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -262,85 +341,6 @@ router.delete("/:id", async (req, res) => {
     }
 
     res.json({ message: "Address deleted successfully" });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * ✅ FIND ADDRESSES NEAR LOCATION (GEO SEARCH)
- * POST /addresses/nearby
- * Body: { longitude, latitude, maxDistance }
- */
-router.post("/nearby", async (req, res) => {
-  try {
-    const { longitude, latitude, maxDistance = 5000 } = req.body; // default 5km
-
-    if (!longitude || !latitude) {
-      return res.status(400).json({
-        error: "Please provide longitude and latitude",
-      });
-    }
-
-    const addresses = await Address.find({
-      location: {
-        $near: {
-          $geometry: {
-            type: "Point",
-            coordinates: [longitude, latitude],
-          },
-          $maxDistance: maxDistance, // in meters
-        },
-      },
-    });
-
-    res.json(addresses);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * ✅ GET DEFAULT ADDRESS FOR USER
- * GET /addresses/:userId/default
- */
-router.get("/:userId/default", async (req, res) => {
-  try {
-    const address = await Address.findOne({
-      user: req.params.userId,
-      isDefault: true,
-    });
-
-    if (!address) {
-      return res.status(404).json({ error: "No default address found" });
-    }
-
-    res.json(address);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * ✅ GET ADDRESSES BY TYPE
- * GET /addresses/:userId/type/:type
- */
-router.get("/:userId/type/:type", async (req, res) => {
-  try {
-    const { userId, type } = req.params;
-
-    if (!["home", "work", "other"].includes(type)) {
-      return res.status(400).json({
-        error: "Invalid address type. Must be home, work, or other",
-      });
-    }
-
-    const addresses = await Address.find({
-      user: userId,
-      type: type,
-    }).sort({ isDefault: -1, createdAt: -1 });
-
-    res.json(addresses);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

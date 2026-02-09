@@ -12,7 +12,7 @@ const authRoutes = require("./routes/authRoutes");
 const addressRoute = require("./routes/addressRoute");
 const orderRoute = require("./routes/orderRoute");
 const paymentRoute = require("./routes/paymentRoute");
-
+const cartRoute = require("./routes/cartRoute");
 const app = express();
 
 app.use(cors());
@@ -27,6 +27,7 @@ app.use("/api/auth", authRoutes);
 app.use("/addresses", addressRoute);
 app.use("/orders", orderRoute);
 app.use("/payments", paymentRoute);
+app.use("/cart", cartRoute);
 
 app.get("/", (req, res) => {
   res.send("VADI Backend running 🚀");

@@ -2,10 +2,19 @@ const mongoose = require("mongoose");
 
 const ProductSchema = new mongoose.Schema(
   {
+    /* ================= BASIC INFO ================= */
+
     name: {
       type: String,
       required: true,
       trim: true,
+    },
+
+    slug: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
     },
 
     description: {
@@ -13,28 +22,16 @@ const ProductSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // Pricing
-    mrp: {
-      type: Number,
-      required: true,
-    },
-
-    price: {
-      type: Number,
-      required: true,
-    },
-
-    discount: {
-      type: Number,
-      default: 0, // percentage
-      min: 0,
-      max: 100,
-    },
-
-    unit: {
+    brand: {
       type: String,
-      required: true, // kg / pcs / litre
     },
+
+    baseProductId: {
+      type: String,
+      index: true,
+    },
+
+    /* ================= CATEGORY ================= */
 
     category: {
       type: mongoose.Schema.Types.ObjectId,
@@ -43,48 +40,150 @@ const ProductSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Images
-    image: String, // main image
-    images: [String], // multiple images
+    /* ================= UNIT ================= */
 
-    brand: {
-      type: String, // optional (farm name / vendor)
+    unit: {
+      type: String,
+      required: true, // kg / pcs / litre
     },
 
-    stock: {
+    /* ================= SELLER INFO (PRODUCT LEVEL) ================= */
+
+    seller: {
+      sellerId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Seller",
+        required: true,
+      },
+
+      sellerName: String,
+
+      contact: {
+        phone: String,
+        email: String,
+      },
+
+      location: {
+        city: String,
+        area: String,
+      },
+    },
+
+    /* ================= SHELF LIFE ================= */
+
+    shelfLife: {
+      value: Number,
+      unit: {
+        type: String,
+        enum: ["days", "months"],
+      },
+    },
+
+    expiryRequired: {
+      type: Boolean,
+      default: true,
+    },
+
+    storageInstructions: String,
+
+    /* ================= PRICING HELPERS ================= */
+
+    discount: {
       type: Number,
-      required: true,
+      default: 0,
       min: 0,
+      max: 100,
     },
 
-    // Order quantity control
-    minOrderQty: {
-      type: Number,
-      default: 1,
+    tax: {
+      gstPercent: {
+        type: Number,
+        default: 0,
+      },
+      inclusive: {
+        type: Boolean,
+        default: true,
+      },
     },
 
-    maxOrderQty: {
-      type: Number,
-    },
+    /* ================= SEARCH ================= */
 
-    // UI helpers
+    tags: [String],
+    searchKeywords: [String],
+
+    /* ================= VARIANTS ================= */
+
+    variants: [
+      {
+        packSize: {
+          type: Number,
+          required: true,
+        },
+
+        packUnit: {
+          type: String,
+          enum: ["kg", "g", "litre", "ml", "pcs"],
+          required: true,
+        },
+
+        mrp: {
+          type: Number,
+          required: true,
+        },
+
+        price: {
+          type: Number,
+          required: true,
+        },
+
+        stock: {
+          type: Number,
+          required: true,
+          min: 0,
+        },
+
+        lowStockThreshold: {
+          type: Number,
+          default: 5,
+        },
+
+        sku: String,
+
+        isDefault: {
+          type: Boolean,
+          default: false,
+        },
+
+        isActive: {
+          type: Boolean,
+          default: true,
+        },
+      },
+    ],
+
+    /* ================= IMAGES ================= */
+
+    image: String,
+    images: [String],
+
+    /* ================= UI FLAGS ================= */
+
     featured: {
       type: Boolean,
       default: false,
+      index: true,
     },
 
     trending: {
       type: Boolean,
       default: false,
+      index: true,
     },
 
     bestDeal: {
       type: Boolean,
       default: false,
-    },
-
-    deliveryTime: {
-      type: String, // "10 mins", "1 hour"
+      index: true,
     },
 
     rating: {
@@ -100,17 +199,20 @@ const ProductSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true,
+      index: true,
     },
   },
   { timestamps: true },
 );
 
-// Indexes for faster homepage queries
+/* ================= INDEXES ================= */
+
 ProductSchema.index({
+  category: 1,
   featured: 1,
   trending: 1,
   bestDeal: 1,
-  category: 1,
+  isActive: 1,
 });
 
 module.exports = mongoose.model("Product", ProductSchema);

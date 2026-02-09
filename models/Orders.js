@@ -1,8 +1,87 @@
 const mongoose = require("mongoose");
 
+/* ================= ORDER ITEM ================= */
+
+const OrderItemSchema = new mongoose.Schema(
+  {
+    product: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Product",
+      required: true,
+    },
+
+    variantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+    },
+
+    /* ===== SNAPSHOT ===== */
+
+    productName: {
+      type: String,
+      required: true,
+    },
+
+    image: String,
+
+    packSize: Number,
+    packUnit: String,
+
+    unitPrice: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    mrp: {
+      type: Number,
+      min: 0,
+    },
+
+    discount: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: 0,
+    },
+
+    tax: {
+      gstPercent: Number,
+      inclusive: Boolean,
+    },
+
+    quantity: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+
+    subtotal: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    /* ===== SELLER SNAPSHOT ===== */
+
+    seller: {
+      sellerId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Seller",
+        required: true,
+      },
+      sellerName: String,
+    },
+  },
+  { _id: false },
+);
+
+/* ================= ORDER ================= */
+
 const OrderSchema = new mongoose.Schema(
   {
-    // Who placed the order
+    /* ================= USER ================= */
+
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -10,107 +89,163 @@ const OrderSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Ordered items
-    items: [
-      {
-        product: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "Product",
-          required: true,
-        },
-        name: String, // snapshot (product name at time of order)
-        price: {
-          type: Number,
-          required: true,
-        },
-        quantity: {
-          type: Number,
-          required: true,
-        },
-        unit: String, // kg / pcs (snapshot)
-        image: String, // snapshot
-      },
-    ],
+    /* ================= ITEMS ================= */
 
-    // Pricing summary
+    items: {
+      type: [OrderItemSchema],
+      validate: {
+        validator: (v) => v.length > 0,
+        message: "Order must contain at least one item",
+      },
+    },
+
+    /* ================= TOTALS ================= */
+
     totalItems: {
       type: Number,
       required: true,
+      min: 1,
     },
 
-    subTotal: {
+    totalQuantity: {
       type: Number,
       required: true,
+      min: 1,
+    },
+
+    subtotal: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    totalDiscount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    taxAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
 
     deliveryFee: {
       type: Number,
       default: 0,
+      min: 0,
     },
 
-    discountAmount: {
-      type: Number,
-      default: 0,
-    },
-
-    totalAmount: {
+    grandTotal: {
       type: Number,
       required: true,
+      min: 0,
     },
 
-    // Address
-    address: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Address",
-      required: true,
-    },
-
-    // Payment info
-    paymentMethod: {
-      type: String,
-      enum: ["cod", "upi", "card"],
-      required: true,
-    },
+    /* ================= PAYMENT (COD READY) ================= */
 
     payment: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Payment",
+      method: {
+        type: String,
+        enum: ["cod", "upi", "card", "wallet"],
+        required: true,
+      },
+
+      status: {
+        type: String,
+        enum: ["pending", "paid", "failed", "refunded"],
+        default: "pending",
+      },
+
+      isCod: {
+        type: Boolean,
+        default: false,
+      },
+
+      codCollected: {
+        type: Boolean,
+        default: false,
+      },
+
+      transactionId: String,
+      paidAt: Date,
     },
 
-    paymentStatus: {
-      type: String,
-      enum: ["pending", "paid", "failed"],
-      default: "pending",
+    /* ================= ADDRESS ================= */
+
+    address: {
+      addressId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Address",
+        required: true,
+      },
+
+      snapshot: {
+        name: String,
+        phone: String,
+        addressLine: String,
+        city: String,
+        state: String,
+        pincode: String,
+        landmark: String,
+      },
     },
 
-    // Order lifecycle
-    orderStatus: {
+    /* ================= DELIVERY ================= */
+
+    deliverySlot: {
+      date: Date,
+      slot: String,
+    },
+
+    /* ================= STATUS ================= */
+
+    status: {
       type: String,
       enum: [
-        "pending",
+        "placed",
         "confirmed",
         "packed",
         "out_for_delivery",
         "delivered",
         "cancelled",
+        "returned",
       ],
-      default: "pending",
+      default: "placed",
+      index: true,
     },
 
-    // Delivery
-    deliveryTime: {
-      type: String, // "10 mins", "1 hour"
-    },
+    cancelledAt: Date,
+    cancelReason: String,
 
     deliveredAt: Date,
 
-    cancelledReason: String,
+    /* ================= META ================= */
+
+    orderNumber: {
+      type: String,
+      unique: true,
+      index: true,
+    },
+
+    notes: String,
   },
   { timestamps: true },
 );
 
-// Indexes for fast queries
+/* ================= INDEXES ================= */
+
 OrderSchema.index({ user: 1, createdAt: -1 });
-OrderSchema.index({ orderStatus: 1, paymentStatus: 1 });
+OrderSchema.index({ status: 1 });
+
+/* ================= COD AUTO HANDLING ================= */
+
+OrderSchema.pre("save", async function () {
+  if (this.payment.method === "cod") {
+    this.payment.isCod = true;
+    this.payment.status = "pending";
+  }
+});
 
 module.exports = mongoose.model("Order", OrderSchema);
