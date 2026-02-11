@@ -116,50 +116,6 @@ router.get("/", async (req, res) => {
   }
 });
 
-/* ================= GET REVIEW BY ID ================= */
-
-/**
- * @route   GET /api/reviews/:id
- * @desc    Get single review by ID
- * @access  Public
- */
-router.get("/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid review ID format",
-      });
-    }
-
-    const review = await Review.findById(id)
-      .populate("user", "name email")
-      .populate("product", "name image")
-      .lean();
-
-    if (!review) {
-      return res.status(404).json({
-        success: false,
-        message: "Review not found",
-      });
-    }
-
-    res.json({
-      success: true,
-      data: review,
-    });
-  } catch (error) {
-    console.error("Get review by ID error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch review",
-      error: error.message,
-    });
-  }
-});
-
 /* ================= GET REVIEWS FOR PRODUCT ================= */
 
 /**
@@ -266,6 +222,50 @@ router.get("/product/:productId", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch product reviews",
+      error: error.message,
+    });
+  }
+});
+
+/* ================= GET REVIEW BY ID ================= */
+
+/**
+ * @route   GET /api/reviews/:id
+ * @desc    Get single review by ID
+ * @access  Public
+ */
+router.get("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid review ID format",
+      });
+    }
+
+    const review = await Review.findById(id)
+      .populate("user", "name email")
+      .populate("product", "name image")
+      .lean();
+
+    if (!review) {
+      return res.status(404).json({
+        success: false,
+        message: "Review not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: review,
+    });
+  } catch (error) {
+    console.error("Get review by ID error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch review",
       error: error.message,
     });
   }
