@@ -14,10 +14,16 @@ const orderRoute = require("./routes/orderRoute");
 const paymentRoute = require("./routes/paymentRoute");
 const cartRoute = require("./routes/cartRoute");
 const reviewRoute = require("./routes/reviewRoute");
+const adminRoutes = require("./routes/adminAuthRoutes");
 
 const app = express();
 
-app.use(cors());
+app.use(
+  cors({
+    origin: "http://localhost:3000",
+    credentials: true,
+  }),
+);
 app.use(express.json());
 
 // 🔥 serve uploads FIRST
@@ -31,6 +37,7 @@ app.use("/orders", orderRoute);
 app.use("/payments", paymentRoute);
 app.use("/cart", cartRoute);
 app.use("/reviews", reviewRoute);
+app.use("/api/admin", adminRoutes);
 
 app.get("/", (req, res) => {
   res.send("VADI Backend running 🚀");
