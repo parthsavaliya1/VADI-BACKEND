@@ -51,8 +51,7 @@ const ProductSchema = new mongoose.Schema(
 
     seller: {
       sellerId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Seller",
+        type: String, // Changed from ObjectId to String
         required: true,
       },
 
@@ -68,7 +67,6 @@ const ProductSchema = new mongoose.Schema(
         area: String,
       },
     },
-
     /* ================= SHELF LIFE ================= */
 
     shelfLife: {
