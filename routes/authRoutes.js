@@ -1,20 +1,49 @@
 const express = require("express");
-const bcrypt = require("bcryptjs");
+const axios = require("axios");
 const User = require("../models/User");
 
 const router = express.Router();
 
 const ADMIN_PHONE = "+919909049699";
+const TWO_FACTOR_API_KEY = process.env.TWO_FACTOR_API_KEY;
 
-const twilio = require("twilio");
+// -----------------------------------------------------------------
+// UTIL: Send OTP via 2Factor.in
+// URL format: /API/V1/{apiKey}/SMS/{phone}/AUTOGEN/OTP1
+// 2Factor generates and sends the OTP — returns sessionId
+// -----------------------------------------------------------------
+async function sendOtpVia2Factor(phone) {
+  const url = `https://2factor.in/API/V1/${TWO_FACTOR_API_KEY}/SMS/${phone}/AUTOGEN/OTP1`;
+  const response = await axios.get(url);
+  const data = response.data;
 
-const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
+  // { Status: "Success", Details: "SESSION_ID" }
+  if (data.Status !== "Success") {
+    throw new Error(`2Factor send failed: ${data.Details}`);
+  }
 
-/**
- * ✅ SIGNUP
- * POST /api/auth/signup
- */
+  return data.Details; // sessionId (not needed for VERIFY3 but useful to store)
+}
 
+// -----------------------------------------------------------------
+// UTIL: Verify OTP via 2Factor.in
+// URL format: /API/V1/{apiKey}/SMS/VERIFY3/{phone}/{otp}
+// Note: VERIFY3 uses phone number, not sessionId
+// -----------------------------------------------------------------
+async function verifyOtpVia2Factor(phone, otp) {
+  const url = `https://2factor.in/API/V1/${TWO_FACTOR_API_KEY}/SMS/VERIFY3/${phone}/${otp}`;
+  const response = await axios.get(url);
+  const data = response.data;
+
+  // { Status: "Success", Details: "OTP Matched" }
+  return data.Status === "Success" && data.Details === "OTP Matched";
+}
+
+// -----------------------------------------------------------------
+// SIGNUP
+// POST /api/auth/signup
+// Called AFTER OTP is verified. Completes the user profile.
+// -----------------------------------------------------------------
 router.post("/signup", async (req, res) => {
   try {
     const { name, phone, profileImage, role } = req.body;
@@ -24,20 +53,16 @@ router.post("/signup", async (req, res) => {
     }
 
     const normalizedPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
-
     const user = await User.findOne({ phone: normalizedPhone });
 
-    // ❌ If no user found (OTP not verified)
     if (!user) {
       return res.status(400).json({ error: "OTP not verified" });
     }
 
-    // ❌ If phone not verified
     if (!user.isPhoneVerified) {
       return res.status(400).json({ error: "Phone not verified" });
     }
 
-    // ❌ If user already completed signup
     if (user.name && user.isPhoneVerified) {
       return res.status(409).json({
         error: "This phone number is already registered. Please login instead.",
@@ -53,50 +78,56 @@ router.post("/signup", async (req, res) => {
     user.profileImage = profileImage;
     user.role = finalRole;
     user.lastLoginAt = new Date();
-
     await user.save();
 
     res.status(201).json(user);
   } catch (err) {
-    console.error(err);
+    console.error("Signup error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
 
+// -----------------------------------------------------------------
+// SEND OTP
+// POST /api/auth/send-otp
+// Body: { phone, mode }  — mode: "signup" | "login"
+// -----------------------------------------------------------------
 router.post("/send-otp", async (req, res) => {
   try {
-    const { phone, mode } = req.body; // 🔥 add mode
-    const normalizedPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
+    const { phone, mode } = req.body;
 
+    if (!phone) {
+      return res.status(400).json({ error: "Phone is required" });
+    }
+
+    const normalizedPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
     let user = await User.findOne({ phone: normalizedPhone });
 
-    // 🚨 If signup mode and user already exists
+    // Block signup if already fully registered
     if (mode === "signup" && user && user.name && user.isPhoneVerified) {
       return res.status(409).json({
         error: "This phone number is already registered. Please login instead.",
       });
     }
 
+    // Create stub user on first contact
     if (!user) {
       user = await User.create({ phone: normalizedPhone });
     }
 
-    // Do not regenerate valid OTP
+    // Don't resend if a valid OTP window is still open
     if (user.otp && user.otpExpiresAt > new Date()) {
       return res.json({ success: true, message: "OTP already sent" });
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // Send via 2Factor — they generate + deliver the OTP
+    await sendOtpVia2Factor(normalizedPhone);
 
-    user.otp = otp;
+    // Mark OTP as sent; set 5-min expiry window on our side too
+    user.otp = "sent";
     user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    user.otpAttempts = 0;
     await user.save();
-
-    await client.messages.create({
-      body: `Your VADI OTP is ${otp}. Valid for 5 minutes.`,
-      from: process.env.TWILIO_PHONE,
-      to: normalizedPhone,
-    });
 
     res.json({ success: true });
   } catch (err) {
@@ -105,9 +136,19 @@ router.post("/send-otp", async (req, res) => {
   }
 });
 
+// -----------------------------------------------------------------
+// VERIFY OTP
+// POST /api/auth/verify-otp
+// Body: { phone, otp }
+// 2Factor VERIFY3 verifies against phone number directly
+// -----------------------------------------------------------------
 router.post("/verify-otp", async (req, res) => {
   try {
     const { phone, otp } = req.body;
+
+    if (!phone || !otp) {
+      return res.status(400).json({ error: "Phone and OTP are required" });
+    }
 
     const normalizedPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
     const user = await User.findOne({ phone: normalizedPhone });
@@ -120,18 +161,24 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ error: "OTP expired" });
     }
 
-    if (String(user.otp) !== String(otp)) {
+    // Verify with 2Factor using phone + user-entered OTP
+    const isValid = await verifyOtpVia2Factor(normalizedPhone, otp);
+
+    if (!isValid) {
+      user.otpAttempts = (user.otpAttempts || 0) + 1;
+      await user.save();
       return res.status(400).json({ error: "Invalid OTP" });
     }
 
+    // Clear OTP state, mark phone as verified
     user.otp = null;
     user.otpExpiresAt = null;
+    user.otpAttempts = 0;
     user.isPhoneVerified = true;
+    user.otpVerifiedAt = new Date();
     user.lastLoginAt = new Date();
-
     await user.save();
 
-    // New user if name not set yet
     const isNewUser = !user.name;
 
     res.json({

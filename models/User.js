@@ -13,7 +13,6 @@ const UserSchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
-
     profileImage: {
       type: String,
     },
