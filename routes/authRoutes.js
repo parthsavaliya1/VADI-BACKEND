@@ -6,9 +6,7 @@ const router = express.Router();
 
 const ADMIN_PHONE = "+919909049699";
 
-const twilio = require("twilio");
-
-const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
+const axios = require("axios");
 
 /**
  * ✅ SIGNUP
@@ -65,12 +63,15 @@ router.post("/signup", async (req, res) => {
 
 router.post("/send-otp", async (req, res) => {
   try {
-    const { phone, mode } = req.body; // 🔥 add mode
-    const normalizedPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
+    const { phone, mode } = req.body;
 
-    let user = await User.findOne({ phone: normalizedPhone });
+    const cleanPhone = phone.replace(/\D/g, "");
+    const normalizedPhone =
+      cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
 
-    // 🚨 If signup mode and user already exists
+    let user = await User.findOne({ phone: `+${normalizedPhone}` });
+
+    // 🚨 If signup mode and already registered
     if (mode === "signup" && user && user.name && user.isPhoneVerified) {
       return res.status(409).json({
         error: "This phone number is already registered. Please login instead.",
@@ -78,10 +79,10 @@ router.post("/send-otp", async (req, res) => {
     }
 
     if (!user) {
-      user = await User.create({ phone: normalizedPhone });
+      user = await User.create({ phone: `+${normalizedPhone}` });
     }
 
-    // Do not regenerate valid OTP
+    // Prevent regenerating valid OTP
     if (user.otp && user.otpExpiresAt > new Date()) {
       return res.json({ success: true, message: "OTP already sent" });
     }
@@ -92,15 +93,25 @@ router.post("/send-otp", async (req, res) => {
     user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
     await user.save();
 
-    await client.messages.create({
-      body: `Your VADI OTP is ${otp}. Valid for 5 minutes.`,
-      from: process.env.TWILIO_PHONE,
-      to: normalizedPhone,
-    });
+    // 🔥 SEND OTP VIA MSG91
+    await axios.post(
+      "https://control.msg91.com/api/v5/otp",
+      {
+        mobile: normalizedPhone,
+        otp: otp,
+        sender: process.env.MSG91_SENDER_ID,
+      },
+      {
+        headers: {
+          authkey: process.env.MSG91_AUTH_KEY,
+          "Content-Type": "application/json",
+        },
+      },
+    );
 
     res.json({ success: true });
   } catch (err) {
-    console.error("OTP send failed:", err);
+    console.error("MSG91 OTP send failed:", err.response?.data || err.message);
     res.status(500).json({ error: "Failed to send OTP" });
   }
 });
