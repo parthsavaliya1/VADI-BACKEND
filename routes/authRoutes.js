@@ -1,126 +1,151 @@
 const express = require("express");
-const bcrypt = require("bcryptjs");
+const axios = require("axios");
 const User = require("../models/User");
 
 const router = express.Router();
 
+/* ────────────────────────────────────────────
+   CONFIG
+──────────────────────────────────────────── */
+
 const ADMIN_PHONE = "+919909049699";
 
-const axios = require("axios");
+// Dummy / test account — bypasses real OTP
+// Set DUMMY_PHONE and DUMMY_OTP in your .env to override defaults
+const DUMMY_PHONE = process.env.DUMMY_PHONE || "+919999999999";
+const DUMMY_OTP   = process.env.DUMMY_OTP   || "123456";
+
+/* ────────────────────────────────────────────
+   HELPERS
+──────────────────────────────────────────── */
 
 /**
- * ✅ SIGNUP
- * POST /api/auth/signup
+ * Normalise any phone input → "+91XXXXXXXXXX"
  */
-
-router.post("/signup", async (req, res) => {
-  try {
-    const { name, phone, profileImage, role } = req.body;
-
-    if (!name || !phone) {
-      return res.status(400).json({ error: "Name and phone are required" });
-    }
-
-    const normalizedPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
-
-    const user = await User.findOne({ phone: normalizedPhone });
-
-    // ❌ If no user found (OTP not verified)
-    if (!user) {
-      return res.status(400).json({ error: "OTP not verified" });
-    }
-
-    // ❌ If phone not verified
-    if (!user.isPhoneVerified) {
-      return res.status(400).json({ error: "Phone not verified" });
-    }
-
-    // ❌ If user already completed signup
-    if (user.name && user.isPhoneVerified) {
-      return res.status(409).json({
-        error: "This phone number is already registered. Please login instead.",
-      });
-    }
-
-    let finalRole = "user";
-    if (normalizedPhone === ADMIN_PHONE && role === "admin") {
-      finalRole = "admin";
-    }
-
-    user.name = name;
-    user.profileImage = profileImage;
-    user.role = finalRole;
-    user.lastLoginAt = new Date();
-
-    await user.save();
-
-    res.status(201).json(user);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
+function normalizePhone(phone) {
+  const digits = phone.replace(/\D/g, "");
+  // already has country code
+  if (digits.length === 12 && digits.startsWith("91")) {
+    return `+${digits}`;
   }
-});
+  // bare 10-digit
+  if (digits.length === 10) {
+    return `+91${digits}`;
+  }
+  // already "+91..."
+  if (phone.startsWith("+91")) return phone;
+  return `+91${digits}`;
+}
 
+/**
+ * Returns true for the dummy/test account.
+ */
+function isDummyPhone(phone) {
+  return normalizePhone(phone) === normalizePhone(DUMMY_PHONE);
+}
+
+/**
+ * Send OTP via 2Factor API.
+ * Docs: https://2factor.in/API/
+ * Returns the session ID string on success, throws on failure.
+ */
+async function send2FactorOTP(phone, otp) {
+  const tenDigit = phone.replace(/^\+91/, ""); // 2factor expects 10 digits
+
+  const url = `https://2factor.in/API/V1/${process.env.TWO_FACTOR_API_KEY}/SMS/${tenDigit}/${otp}`;
+
+  const response = await axios.get(url);
+
+  if (response.data?.Status !== "Success") {
+    throw new Error(response.data?.Details || "2Factor OTP send failed");
+  }
+
+  return response.data.Details; // session ID
+}
+
+/* ────────────────────────────────────────────
+   ROUTES
+──────────────────────────────────────────── */
+
+/**
+ * POST /api/auth/send-otp
+ * Body: { phone, mode }   mode = "signup" | "login"
+ */
 router.post("/send-otp", async (req, res) => {
   try {
     const { phone, mode } = req.body;
 
-    const cleanPhone = phone.replace(/\D/g, "");
-    const normalizedPhone =
-      cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+    if (!phone) {
+      return res.status(400).json({ error: "Phone is required" });
+    }
 
-    let user = await User.findOne({ phone: `+${normalizedPhone}` });
+    const normalizedPhone = normalizePhone(phone);
 
-    // 🚨 If signup mode and already registered
+    let user = await User.findOne({ phone: normalizedPhone });
+
+    // Block re-signup for already-registered numbers
     if (mode === "signup" && user && user.name && user.isPhoneVerified) {
       return res.status(409).json({
         error: "This phone number is already registered. Please login instead.",
       });
     }
 
+    // Create a placeholder user so we can attach OTP before verification
     if (!user) {
-      user = await User.create({ phone: `+${normalizedPhone}` });
+      user = await User.create({ phone: normalizedPhone });
     }
 
-    // Prevent regenerating valid OTP
+    // ── Dummy account: skip real OTP ──────────────────────────────────
+    if (isDummyPhone(normalizedPhone)) {
+      user.otp          = DUMMY_OTP;
+      user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+      await user.save();
+
+      console.log(`[DEV] Dummy OTP for ${normalizedPhone}: ${DUMMY_OTP}`);
+
+      return res.json({
+        success: true,
+        message: "OTP sent (dummy account)",
+        // expose in dev/test so the frontend can auto-fill if needed
+        ...(process.env.NODE_ENV !== "production" && { devOtp: DUMMY_OTP }),
+      });
+    }
+
+    // ── Real account: don't regenerate if a valid OTP already exists ──
     if (user.otp && user.otpExpiresAt > new Date()) {
       return res.json({ success: true, message: "OTP already sent" });
     }
 
+    // Generate fresh OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    user.otp = otp;
-    user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    // Send via 2Factor
+    await send2FactorOTP(normalizedPhone, otp);
+
+    user.otp          = otp;
+    user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min
     await user.save();
 
-    // 🔥 SEND OTP VIA MSG91
-    await axios.post(
-      "https://control.msg91.com/api/v5/otp",
-      {
-        mobile: normalizedPhone,
-        otp: otp,
-        sender: process.env.MSG91_SENDER_ID,
-      },
-      {
-        headers: {
-          authkey: process.env.MSG91_AUTH_KEY,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-
-    res.json({ success: true });
+    return res.json({ success: true });
   } catch (err) {
-    console.error("MSG91 OTP send failed:", err.response?.data || err.message);
-    res.status(500).json({ error: "Failed to send OTP" });
+    console.error("send-otp error:", err.response?.data || err.message);
+    return res.status(500).json({ error: "Failed to send OTP" });
   }
 });
 
+/**
+ * POST /api/auth/verify-otp
+ * Body: { phone, otp }
+ */
 router.post("/verify-otp", async (req, res) => {
   try {
     const { phone, otp } = req.body;
 
-    const normalizedPhone = phone.startsWith("+91") ? phone : `+91${phone}`;
+    if (!phone || !otp) {
+      return res.status(400).json({ error: "Phone and OTP are required" });
+    }
+
+    const normalizedPhone = normalizePhone(phone);
     const user = await User.findOne({ phone: normalizedPhone });
 
     if (!user || !user.otp || !user.otpExpiresAt) {
@@ -135,25 +160,74 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ error: "Invalid OTP" });
     }
 
-    user.otp = null;
-    user.otpExpiresAt = null;
+    // Clear OTP fields
+    user.otp            = null;
+    user.otpExpiresAt   = null;
     user.isPhoneVerified = true;
-    user.lastLoginAt = new Date();
+    user.lastLoginAt    = new Date();
 
     await user.save();
 
-    // New user if name not set yet
     const isNewUser = !user.name;
 
-    res.json({
+    return res.json({
       success: true,
       phone: normalizedPhone,
       user,
       isNewUser,
     });
   } catch (err) {
-    console.error("Verify OTP failed:", err);
-    res.status(500).json({ error: "OTP verification failed" });
+    console.error("verify-otp error:", err);
+    return res.status(500).json({ error: "OTP verification failed" });
+  }
+});
+
+/**
+ * POST /api/auth/signup
+ * Body: { name, phone, profileImage?, role? }
+ */
+router.post("/signup", async (req, res) => {
+  try {
+    const { name, phone, profileImage, role } = req.body;
+
+    if (!name || !phone) {
+      return res.status(400).json({ error: "Name and phone are required" });
+    }
+
+    const normalizedPhone = normalizePhone(phone);
+    const user = await User.findOne({ phone: normalizedPhone });
+
+    if (!user) {
+      return res.status(400).json({ error: "OTP not verified" });
+    }
+
+    if (!user.isPhoneVerified) {
+      return res.status(400).json({ error: "Phone not verified" });
+    }
+
+    if (user.name && user.isPhoneVerified) {
+      return res.status(409).json({
+        error: "This phone number is already registered. Please login instead.",
+      });
+    }
+
+    // Only allow admin role for the designated admin number
+    let finalRole = "user";
+    if (normalizedPhone === ADMIN_PHONE && role === "admin") {
+      finalRole = "admin";
+    }
+
+    user.name         = name;
+    user.profileImage = profileImage;
+    user.role         = finalRole;
+    user.lastLoginAt  = new Date();
+
+    await user.save();
+
+    return res.status(201).json(user);
+  } catch (err) {
+    console.error("signup error:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 });
 

@@ -51,11 +51,15 @@ const ProductSchema = new mongoose.Schema(
 
     seller: {
       sellerId: {
-        type: String, // Changed from ObjectId to String
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Seller",
         required: true,
       },
 
-      sellerName: String,
+      sellerName: {
+        type: String,
+        required: true,
+      },
 
       contact: {
         phone: String,

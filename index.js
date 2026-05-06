@@ -16,6 +16,7 @@ const cartRoute = require("./routes/cartRoute");
 const reviewRoute = require("./routes/reviewRoute");
 const adminAuthRoutes = require("./routes/adminAuthRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const sellerRoutes = require("./routes/sellerRoutes");
 
 const app = express();
 
@@ -39,6 +40,7 @@ app.use("/orders", orderRoute);
 app.use("/payments", paymentRoute);
 app.use("/cart", cartRoute);
 app.use("/reviews", reviewRoute);
+app.use("/sellers", sellerRoutes);
 app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin", adminRoutes);
 

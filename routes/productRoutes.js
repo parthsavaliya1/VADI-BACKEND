@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const Product = require("../models/Product"); // Adjust path as needed
+const Seller = require("../models/Seller");
 const mongoose = require("mongoose");
 
 /* ================= HELPER FUNCTIONS ================= */
@@ -63,7 +64,9 @@ router.get("/", async (req, res) => {
     const filter = { isActive };
 
     if (category) filter.category = category;
-    if (seller) filter["seller.sellerId"] = seller;
+    if (seller && mongoose.Types.ObjectId.isValid(seller)) {
+      filter["seller.sellerId"] = seller;
+    }
     if (featured !== undefined) filter.featured = featured === "true";
     if (trending !== undefined) filter.trending = trending === "true";
     if (bestDeal !== undefined) filter.bestDeal = bestDeal === "true";
@@ -97,6 +100,7 @@ router.get("/", async (req, res) => {
     // Execute query
     const products = await Product.find(filter)
       .populate("category", "name slug")
+      .populate("seller.sellerId", "name code")
       .sort(sort)
       .limit(Number(limit))
       .skip(skip)
@@ -155,6 +159,7 @@ router.get("/category/:categoryId", async (req, res) => {
 
     const products = await Product.find(filter)
       .populate("category", "name slug")
+      .populate("seller.sellerId", "name code")
       .sort(sort)
       .limit(Number(limit))
       .skip(skip)
@@ -214,7 +219,8 @@ router.get("/:id/similar", async (req, res) => {
       ],
     })
       .limit(8)
-      .populate("category", "name slug");
+      .populate("category", "name slug")
+      .populate("seller.sellerId", "name code");
 
     res.json({
       success: true,
@@ -252,6 +258,7 @@ router.get("/:id", async (req, res) => {
       "category",
       "name slug",
     );
+    await product?.populate("seller.sellerId", "name code");
 
     if (!product) {
       return res.status(404).json({
@@ -328,10 +335,19 @@ router.post("/", async (req, res) => {
       });
     }
 
-    if (!seller || !seller.sellerId) {
+    const sellerId = seller?.sellerId || seller;
+    if (!sellerId || !mongoose.Types.ObjectId.isValid(sellerId)) {
       return res.status(400).json({
         success: false,
-        message: "Seller information is required",
+        message: "Valid seller is required",
+      });
+    }
+
+    const sellerDoc = await Seller.findById(sellerId);
+    if (!sellerDoc || !sellerDoc.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: "Seller not found or inactive",
       });
     }
 
@@ -363,7 +379,18 @@ router.post("/", async (req, res) => {
       brand,
       category,
       unit,
-      seller,
+      seller: {
+        sellerId: sellerDoc._id,
+        sellerName: sellerDoc.name,
+        contact: {
+          phone: sellerDoc.phone || "",
+          email: sellerDoc.email || "",
+        },
+        location: {
+          city: sellerDoc.location?.city || "",
+          area: sellerDoc.location?.area || "",
+        },
+      },
       shelfLife,
       expiryRequired,
       storageInstructions,
@@ -384,6 +411,7 @@ router.post("/", async (req, res) => {
 
     // Populate category before sending response
     await product.populate("category", "name slug");
+    await product.populate("seller.sellerId", "name code");
 
     res.status(201).json({
       success: true,
@@ -439,6 +467,37 @@ router.put("/:id", async (req, res) => {
 
     const updateData = { ...req.body };
 
+    if (updateData.seller) {
+      const sellerId = updateData.seller?.sellerId || updateData.seller;
+      if (!sellerId || !mongoose.Types.ObjectId.isValid(sellerId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Valid seller is required",
+        });
+      }
+
+      const sellerDoc = await Seller.findById(sellerId);
+      if (!sellerDoc || !sellerDoc.isActive) {
+        return res.status(400).json({
+          success: false,
+          message: "Seller not found or inactive",
+        });
+      }
+
+      updateData.seller = {
+        sellerId: sellerDoc._id,
+        sellerName: sellerDoc.name,
+        contact: {
+          phone: sellerDoc.phone || "",
+          email: sellerDoc.email || "",
+        },
+        location: {
+          city: sellerDoc.location?.city || "",
+          area: sellerDoc.location?.area || "",
+        },
+      };
+    }
+
     // If name is being updated, regenerate slug
     if (updateData.name && updateData.name !== existingProduct.name) {
       let newSlug = generateSlug(updateData.name);
@@ -472,7 +531,9 @@ router.put("/:id", async (req, res) => {
     const updatedProduct = await Product.findByIdAndUpdate(id, updateData, {
       new: true,
       runValidators: true,
-    }).populate("category", "name slug");
+    })
+      .populate("category", "name slug")
+      .populate("seller.sellerId", "name code");
 
     res.json({
       success: true,
