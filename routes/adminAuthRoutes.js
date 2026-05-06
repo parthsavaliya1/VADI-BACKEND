@@ -9,15 +9,12 @@ router.post("/register", async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
-    console.log("ANNANA");
-
-    // Check if admin already exists
-    const existingAdmin = await Admin.findOne();
-    console.log("eee", existingAdmin);
+    // Check if admin with same email exists
+    const existingAdmin = await Admin.findOne({ email });
 
     if (existingAdmin) {
       return res.status(403).json({
-        message: "Admin already exists. Registration disabled.",
+        message: "Admin with this email already exists.",
       });
     }
 

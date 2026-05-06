@@ -109,11 +109,11 @@ router.get("/order/:orderId", async (req, res) => {
   }
 });
 
-/* ================= GET ALL PAYMENTS (USER) ================= */
+/* ================= GET ALL PAYMENTS (USER & ADMIN) ================= */
 
 /**
  * @route   GET /api/payments
- * @desc    Get all payments for a user
+ * @desc    Get all payments for a user or all payments for admin
  * @access  Private
  */
 router.get("/", async (req, res) => {
@@ -126,17 +126,22 @@ router.get("/", async (req, res) => {
       limit = 10,
       sortBy = "createdAt",
       sortOrder = "desc",
+      isAdmin,
     } = req.query;
 
-    if (!userId) {
+    // Build filter
+    const filter = {};
+
+    // If not admin, filter by userId
+    if (!isAdmin && userId) {
+      filter.user = userId;
+    } else if (!isAdmin && !userId) {
       return res.status(400).json({
         success: false,
-        message: "User ID is required",
+        message: "User ID is required for non-admin access",
       });
     }
 
-    // Build filter
-    const filter = { user: userId };
     if (status) filter.status = status;
     if (method) filter.method = method;
 
@@ -148,6 +153,7 @@ router.get("/", async (req, res) => {
 
     const payments = await Payment.find(filter)
       .populate("order", "orderNumber status grandTotal")
+      .populate("user", "name email phone")
       .sort(sort)
       .limit(Number(limit))
       .skip(skip)

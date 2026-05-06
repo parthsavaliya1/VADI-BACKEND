@@ -262,6 +262,13 @@ router.post("/", async (req, res) => {
  * @desc    Get all orders for a user
  * @access  Private
  */
+/* ================= GET ALL ORDERS (USER & ADMIN) ================= */
+
+/**
+ * @route   GET /api/orders
+ * @desc    Get all orders for a user or all orders for admin
+ * @access  Private
+ */
 router.get("/", async (req, res) => {
   try {
     const {
@@ -271,17 +278,22 @@ router.get("/", async (req, res) => {
       limit = 10,
       sortBy = "createdAt",
       sortOrder = "desc",
+      isAdmin,
     } = req.query;
 
-    if (!userId) {
+    // Build filter
+    const filter = {};
+
+    // If not admin, filter by userId
+    if (!isAdmin && userId) {
+      filter.user = userId;
+    } else if (!isAdmin && !userId) {
       return res.status(400).json({
         success: false,
-        message: "User ID is required",
+        message: "User ID is required for non-admin access",
       });
     }
 
-    // Build filter
-    const filter = { user: userId };
     if (status) {
       filter.status = status;
     }
@@ -294,6 +306,7 @@ router.get("/", async (req, res) => {
 
     const orders = await Order.find(filter)
       .populate("items.product", "name image")
+      .populate("user", "name email phone")
       .sort(sort)
       .limit(Number(limit))
       .skip(skip)

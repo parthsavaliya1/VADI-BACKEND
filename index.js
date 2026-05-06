@@ -14,13 +14,14 @@ const orderRoute = require("./routes/orderRoute");
 const paymentRoute = require("./routes/paymentRoute");
 const cartRoute = require("./routes/cartRoute");
 const reviewRoute = require("./routes/reviewRoute");
-const adminRoutes = require("./routes/adminAuthRoutes");
+const adminAuthRoutes = require("./routes/adminAuthRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 
 const app = express();
 
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://localhost:3002"],
+    origin: ["http://localhost:3000", "http://localhost:3001"],
     credentials: true,
   }),
 );
@@ -38,6 +39,7 @@ app.use("/orders", orderRoute);
 app.use("/payments", paymentRoute);
 app.use("/cart", cartRoute);
 app.use("/reviews", reviewRoute);
+app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin", adminRoutes);
 
 app.get("/", (req, res) => {
