@@ -231,4 +231,37 @@ router.post("/signup", async (req, res) => {
   }
 });
 
+/**
+ * POST /api/auth/push-token
+ * Body: { userId, pushToken, platform? }
+ */
+router.post("/push-token", async (req, res) => {
+  try {
+    const { userId, pushToken, platform = "unknown" } = req.body;
+
+    if (!userId || !pushToken) {
+      return res.status(400).json({ error: "userId and pushToken are required" });
+    }
+
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    user.pushToken = String(pushToken).trim();
+    user.pushPlatform = ["ios", "android", "web"].includes(platform)
+      ? platform
+      : "unknown";
+    user.pushTokenUpdatedAt = new Date();
+
+    await user.save();
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("push-token error:", err);
+    return res.status(500).json({ error: "Failed to save push token" });
+  }
+});
+
 module.exports = router;

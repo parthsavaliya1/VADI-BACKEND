@@ -61,6 +61,21 @@ const UserSchema = new mongoose.Schema(
     lastLoginAt: {
       type: Date,
     },
+
+    pushToken: {
+      type: String,
+      default: null,
+    },
+
+    pushPlatform: {
+      type: String,
+      enum: ["ios", "android", "web", "unknown"],
+      default: "unknown",
+    },
+
+    pushTokenUpdatedAt: {
+      type: Date,
+    },
   },
   { timestamps: true },
 );
