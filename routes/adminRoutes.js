@@ -4,6 +4,8 @@ const User = require("../models/User");
 const mongoose = require("mongoose");
 const adminAuth = require("../middleware/adminMiddleware");
 const { getFirebaseMessaging } = require("../config/firebaseAdmin");
+const Banner = require("../models/Banner");
+const Notification = require("../models/Notification");
 
 /* ================= GET ALL USERS (ADMIN ONLY) ================= */
 
@@ -312,9 +314,23 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
       );
     }
 
+    const notificationDoc = await Notification.create({
+      title: String(title),
+      body: String(body),
+      imageUrl: imageUrl ? String(imageUrl) : "",
+      stats: {
+        totalTokens: tokens.length,
+        successCount,
+        failureCount: failureCount + (tokens.length - validFcmTokens.length),
+        invalidTokensRemoved: invalidTokens.size,
+      },
+      sentBy: req.admin?.id || null,
+    });
+
     return res.json({
       success: true,
       message: "Notification broadcast completed",
+      data: notificationDoc,
       stats: {
         totalTokens: tokens.length,
         successCount,
@@ -328,6 +344,32 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to send notifications",
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route   GET /api/admin/notifications
+ * @desc    Notification history (stored table)
+ * @access  Admin
+ */
+router.get("/notifications", adminAuth, async (req, res) => {
+  try {
+    const notifications = await Notification.find()
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+
+    return res.json({
+      success: true,
+      data: notifications,
+    });
+  } catch (error) {
+    console.error("Notification list error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch notification history",
       error: error.message,
     });
   }
@@ -388,6 +430,117 @@ router.get("/notifications/tokens", adminAuth, async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch notification token diagnostics",
+      error: error.message,
+    });
+  }
+});
+
+router.get("/banners", adminAuth, async (req, res) => {
+  try {
+    const banners = await Banner.find().sort({ sortOrder: 1, createdAt: -1 }).lean();
+    return res.json({
+      success: true,
+      data: banners,
+    });
+  } catch (error) {
+    console.error("Get admin banners error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch banners",
+      error: error.message,
+    });
+  }
+});
+
+router.post("/banners", adminAuth, async (req, res) => {
+  try {
+    const { title = "", image, sortOrder = 0, isActive = true } = req.body;
+    if (!image) {
+      return res.status(400).json({
+        success: false,
+        message: "Banner image is required",
+      });
+    }
+
+    const banner = await Banner.create({
+      title,
+      image,
+      sortOrder: Number(sortOrder) || 0,
+      isActive: Boolean(isActive),
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Banner created successfully",
+      data: banner,
+    });
+  } catch (error) {
+    console.error("Create banner error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to create banner",
+      error: error.message,
+    });
+  }
+});
+
+router.put("/banners/:id", adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid banner id" });
+    }
+
+    const payload = { ...req.body };
+    if (payload.sortOrder !== undefined) {
+      payload.sortOrder = Number(payload.sortOrder) || 0;
+    }
+
+    const banner = await Banner.findByIdAndUpdate(id, payload, {
+      new: true,
+      runValidators: true,
+    });
+
+    if (!banner) {
+      return res.status(404).json({ success: false, message: "Banner not found" });
+    }
+
+    return res.json({
+      success: true,
+      message: "Banner updated successfully",
+      data: banner,
+    });
+  } catch (error) {
+    console.error("Update banner error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update banner",
+      error: error.message,
+    });
+  }
+});
+
+router.delete("/banners/:id", adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid banner id" });
+    }
+
+    const banner = await Banner.findByIdAndDelete(id);
+    if (!banner) {
+      return res.status(404).json({ success: false, message: "Banner not found" });
+    }
+
+    return res.json({
+      success: true,
+      message: "Banner deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete banner error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete banner",
       error: error.message,
     });
   }

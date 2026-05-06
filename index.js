@@ -8,6 +8,7 @@ connectDB();
 
 const productRoutes = require("./routes/productRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
+const bannerRoutes = require("./routes/bannerRoutes");
 const authRoutes = require("./routes/authRoutes");
 const addressRoute = require("./routes/addressRoute");
 const orderRoute = require("./routes/orderRoute");
@@ -35,6 +36,7 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.use("/products", productRoutes);
 app.use("/categories", categoryRoutes);
+app.use("/banners", bannerRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/addresses", addressRoute);
 app.use("/orders", orderRoute);
