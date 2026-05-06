@@ -169,6 +169,8 @@ const OrderSchema = new mongoose.Schema(
       },
 
       transactionId: String,
+      gatewayOrderId: String,
+      gatewaySignature: String,
       paidAt: Date,
     },
 

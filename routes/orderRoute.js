@@ -5,6 +5,7 @@ const Payment = require("../models/Payment"); // Adjust path as needed
 const Cart = require("../models/Cart"); // Adjust path as needed
 const Product = require("../models/Product"); // Adjust path as needed
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 
 /* ================= HELPER FUNCTIONS ================= */
 
@@ -106,6 +107,16 @@ const restoreStock = async (items) => {
   }
 };
 
+const verifyRazorpaySignature = ({ orderId, paymentId, signature }) => {
+  const secret = process.env.RAZORPAY_KEY_SECRET;
+  if (!secret) return false;
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(`${orderId}|${paymentId}`)
+    .digest("hex");
+  return expected === signature;
+};
+
 /* ================= CREATE ORDER ================= */
 
 /**
@@ -123,12 +134,11 @@ router.post("/", async (req, res) => {
       addressId,
       addressSnapshot,
       paymentMethod,
+      paymentDetails,
       deliverySlot,
       deliveryFee = 0,
       notes,
     } = req.body;
-
-    console.log("RERER", req?.body);
 
     // Validation
     if (!userId || !addressId || !paymentMethod) {
@@ -145,6 +155,50 @@ router.post("/", async (req, res) => {
         success: false,
         message: "Invalid payment method",
       });
+    }
+
+    if (paymentMethod !== "cod") {
+      if (
+        !paymentDetails?.razorpayPaymentId ||
+        !paymentDetails?.razorpayOrderId ||
+        !paymentDetails?.razorpaySignature
+      ) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          success: false,
+          message: "Online payment details are required",
+        });
+      }
+
+      const duplicatePayment = await Payment.findOne({
+        "gateway.paymentId": paymentDetails.razorpayPaymentId,
+      }).populate("order", "_id orderNumber");
+
+      if (duplicatePayment?.order) {
+        await session.abortTransaction();
+        return res.status(409).json({
+          success: false,
+          message: "This payment has already been used",
+          data: {
+            orderId: duplicatePayment.order._id,
+            orderNumber: duplicatePayment.order.orderNumber,
+          },
+        });
+      }
+
+      const signatureOk = verifyRazorpaySignature({
+        orderId: paymentDetails.razorpayOrderId,
+        paymentId: paymentDetails.razorpayPaymentId,
+        signature: paymentDetails.razorpaySignature,
+      });
+
+      if (!signatureOk) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          success: false,
+          message: "Payment signature verification failed",
+        });
+      }
     }
 
     // Get active cart
@@ -190,15 +244,19 @@ router.post("/", async (req, res) => {
       grandTotal,
       payment: {
         method: paymentMethod,
-        status: paymentMethod === "cod" ? "pending" : "pending",
+        status: paymentMethod === "cod" ? "pending" : "paid",
         isCod: paymentMethod === "cod",
+        transactionId: paymentDetails?.razorpayPaymentId,
+        gatewayOrderId: paymentDetails?.razorpayOrderId,
+        gatewaySignature: paymentDetails?.razorpaySignature,
+        paidAt: paymentMethod === "cod" ? undefined : new Date(),
       },
       address: {
         addressId,
         snapshot: addressSnapshot,
       },
       deliverySlot,
-      status: "placed",
+      status: paymentMethod === "cod" ? "placed" : "confirmed",
       orderNumber,
       notes,
     });
@@ -211,8 +269,20 @@ router.post("/", async (req, res) => {
       user: userId,
       amount: grandTotal,
       method: paymentMethod,
-      status: paymentMethod === "cod" ? "pending" : "initiated",
+      status: paymentMethod === "cod" ? "pending" : "success",
       isCod: paymentMethod === "cod",
+      gateway:
+        paymentMethod === "cod"
+          ? undefined
+          : {
+              name: "razorpay",
+              paymentId: paymentDetails?.razorpayPaymentId,
+              orderId: paymentDetails?.razorpayOrderId,
+              signature: paymentDetails?.razorpaySignature,
+              response: {
+                source: "checkout",
+              },
+            },
     });
 
     await payment.save({ session });

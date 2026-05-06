@@ -27,6 +27,7 @@ app.use(
   }),
 );
 
+app.use("/payments/webhook/razorpay", express.raw({ type: "application/json" }));
 app.use(express.json());
 
 // 🔥 serve uploads FIRST

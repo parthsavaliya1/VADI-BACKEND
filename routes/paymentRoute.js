@@ -2,7 +2,36 @@ const express = require("express");
 const router = express.Router();
 const Payment = require("../models/Payment"); // Adjust path as needed
 const Order = require("../models/Orders"); // Adjust path as needed
+const Cart = require("../models/Cart");
 const mongoose = require("mongoose");
+const Razorpay = require("razorpay");
+const crypto = require("crypto");
+
+const razorpayKeyId = process.env.RAZORPAY_KEY_ID;
+const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET;
+const razorpayWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+const razorpay =
+  razorpayKeyId && razorpayKeySecret
+    ? new Razorpay({
+        key_id: razorpayKeyId,
+        key_secret: razorpayKeySecret,
+      })
+    : null;
+
+const verifyRazorpaySignature = ({
+  orderId,
+  paymentId,
+  signature,
+  secret = razorpayKeySecret,
+}) => {
+  if (!secret) return false;
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(`${orderId}|${paymentId}`)
+    .digest("hex");
+  return expected === signature;
+};
 
 /* ================= GET PAYMENT BY ID ================= */
 
@@ -176,6 +205,246 @@ router.get("/", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch payments",
+      error: error.message,
+    });
+  }
+});
+
+/* ================= CREATE RAZORPAY ORDER ================= */
+
+/**
+ * @route   POST /payments/create-order
+ * @desc    Create Razorpay order from active cart total
+ * @access  Private
+ */
+router.post("/create-order", async (req, res) => {
+  try {
+    const { userId, deliveryFee = 0, paymentMethod = "upi" } = req.body;
+
+    if (!razorpay) {
+      return res.status(500).json({
+        success: false,
+        message:
+          "Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.",
+      });
+    }
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    if (!["upi", "card", "wallet"].includes(paymentMethod)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid online payment method",
+      });
+    }
+
+    const cart = await Cart.findOne({ user: userId, status: "active" }).lean();
+    if (!cart || !cart.items?.length) {
+      return res.status(400).json({
+        success: false,
+        message: "Cart is empty",
+      });
+    }
+
+    const amount = Number(cart.grandTotal || 0) + Number(deliveryFee || 0);
+    if (amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order amount",
+      });
+    }
+
+    const amountInPaise = Math.round(amount * 100);
+    const receipt = `vadi_${Date.now()}`;
+
+    const razorpayOrder = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: "INR",
+      receipt,
+      notes: {
+        userId: String(userId),
+      },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        key: razorpayKeyId,
+        amount,
+        amountInPaise,
+        currency: "INR",
+        razorpayOrderId: razorpayOrder.id,
+        receipt,
+      },
+    });
+  } catch (error) {
+    console.error("Create Razorpay order error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create Razorpay order",
+      error: error.message,
+    });
+  }
+});
+
+/* ================= VERIFY RAZORPAY SIGNATURE ================= */
+
+/**
+ * @route   POST /payments/verify-signature
+ * @desc    Verify Razorpay payment signature
+ * @access  Private
+ */
+router.post("/verify-signature", async (req, res) => {
+  try {
+    const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+
+    if (!razorpayKeySecret) {
+      return res.status(500).json({
+        success: false,
+        message: "Razorpay secret is not configured",
+      });
+    }
+
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "razorpayOrderId, razorpayPaymentId and razorpaySignature are required",
+      });
+    }
+
+    const isValid = verifyRazorpaySignature({
+      orderId: razorpayOrderId,
+      paymentId: razorpayPaymentId,
+      signature: razorpaySignature,
+    });
+
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment signature verification failed",
+      });
+    }
+
+    if (!razorpay) {
+      return res.status(500).json({
+        success: false,
+        message: "Razorpay client is not configured",
+      });
+    }
+
+    const payment = await razorpay.payments.fetch(razorpayPaymentId);
+    if (
+      payment?.status !== "captured" &&
+      payment?.status !== "authorized" &&
+      payment?.status !== "created"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: `Unexpected payment status: ${payment?.status || "unknown"}`,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Signature verified",
+    });
+  } catch (error) {
+    console.error("Verify Razorpay signature error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify payment signature",
+      error: error.message,
+    });
+  }
+});
+
+/* ================= RAZORPAY WEBHOOK ================= */
+
+/**
+ * @route   POST /payments/webhook/razorpay
+ * @desc    Razorpay webhook callback (signed)
+ * @access  Public (signature verified)
+ */
+router.post("/webhook/razorpay", async (req, res) => {
+  try {
+    if (!razorpayWebhookSecret) {
+      return res.status(500).json({
+        success: false,
+        message: "Razorpay webhook secret is not configured",
+      });
+    }
+
+    const signature = req.headers["x-razorpay-signature"];
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body
+      : Buffer.from(JSON.stringify(req.body || {}));
+
+    const expected = crypto
+      .createHmac("sha256", razorpayWebhookSecret)
+      .update(rawBody)
+      .digest("hex");
+
+    if (!signature || signature !== expected) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid webhook signature",
+      });
+    }
+
+    const payload = JSON.parse(rawBody.toString("utf8"));
+    const event = payload?.event;
+    const paymentEntity = payload?.payload?.payment?.entity;
+
+    if (!paymentEntity?.id) {
+      return res.status(200).json({ success: true, message: "Webhook ignored" });
+    }
+
+    const paymentDoc = await Payment.findOne({
+      "gateway.paymentId": paymentEntity.id,
+    });
+
+    if (!paymentDoc) {
+      return res.status(200).json({
+        success: true,
+        message: "Webhook accepted (payment record not found yet)",
+      });
+    }
+
+    if (event === "payment.captured" || event === "payment.authorized") {
+      paymentDoc.status = "success";
+      paymentDoc.gateway.response = payload;
+      await paymentDoc.save();
+
+      await Order.findByIdAndUpdate(paymentDoc.order, {
+        "payment.status": "paid",
+        "payment.transactionId": paymentEntity.id,
+        "payment.paidAt": new Date(),
+        status: "confirmed",
+      });
+    } else if (event === "payment.failed") {
+      paymentDoc.status = "failed";
+      paymentDoc.failureReason =
+        paymentEntity?.error_description || paymentEntity?.error_reason || "Failed";
+      paymentDoc.gateway.response = payload;
+      await paymentDoc.save();
+
+      await Order.findByIdAndUpdate(paymentDoc.order, {
+        "payment.status": "failed",
+      });
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error("Razorpay webhook error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Webhook handling failed",
       error: error.message,
     });
   }
