@@ -144,7 +144,7 @@ router.post("/send-otp", async (req, res) => {
  */
 router.post("/verify-otp", async (req, res) => {
   try {
-    const { phone, otp } = req.body;
+    const { phone, otp, privacyPolicyAccepted } = req.body;
 
     if (!phone || !otp) {
       return res.status(400).json({ error: "Phone and OTP are required" });
@@ -176,6 +176,13 @@ router.post("/verify-otp", async (req, res) => {
     user.isPhoneVerified = true;
     user.lastLoginAt    = new Date();
 
+    if (privacyPolicyAccepted === true) {
+      user.privacyPolicyAccepted = true;
+      if (!user.privacyPolicyAcceptedAt) {
+        user.privacyPolicyAcceptedAt = new Date();
+      }
+    }
+
     await user.save();
 
     const isNewUser = !user.name;
@@ -198,7 +205,7 @@ router.post("/verify-otp", async (req, res) => {
  */
 router.post("/signup", async (req, res) => {
   try {
-    const { name, phone, profileImage, role } = req.body;
+    const { name, phone, profileImage, role, privacyPolicyAccepted } = req.body;
 
     if (!name || !phone) {
       return res.status(400).json({ error: "Name and phone are required" });
@@ -231,6 +238,13 @@ router.post("/signup", async (req, res) => {
     user.profileImage = profileImage;
     user.role         = finalRole;
     user.lastLoginAt  = new Date();
+
+    if (privacyPolicyAccepted === true) {
+      user.privacyPolicyAccepted = true;
+      if (!user.privacyPolicyAcceptedAt) {
+        user.privacyPolicyAcceptedAt = new Date();
+      }
+    }
 
     await user.save();
 

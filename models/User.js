@@ -75,6 +75,16 @@ const UserSchema = new mongoose.Schema(
     pushTokenUpdatedAt: {
       type: Date,
     },
+
+    privacyPolicyAccepted: {
+      type: Boolean,
+      default: false,
+    },
+
+    privacyPolicyAcceptedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true },
 );
