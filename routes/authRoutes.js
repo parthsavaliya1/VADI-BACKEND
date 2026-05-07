@@ -9,6 +9,7 @@ const router = express.Router();
 ──────────────────────────────────────────── */
 
 const ADMIN_PHONE = "+919909049699";
+const TWO_FACTOR_API_KEY = process.env.TWO_FACTOR_API_KEY;
 
 // Dummy / test account — bypasses real OTP
 // Set DUMMY_PHONE and DUMMY_OTP in your .env to override defaults
@@ -80,6 +81,10 @@ router.post("/send-otp", async (req, res) => {
     }
 
     const normalizedPhone = normalizePhone(phone);
+
+    if (!phone) {
+      return res.status(400).json({ error: "Phone is required" });
+    }
 
     let user = await User.findOne({ phone: normalizedPhone });
 
@@ -156,7 +161,12 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ error: "OTP expired" });
     }
 
-    if (String(user.otp) !== String(otp)) {
+    // Verify with 2Factor using phone + user-entered OTP
+    const isValid = await verifyOtpVia2Factor(normalizedPhone, otp);
+
+    if (!isValid) {
+      user.otpAttempts = (user.otpAttempts || 0) + 1;
+      await user.save();
       return res.status(400).json({ error: "Invalid OTP" });
     }
 
