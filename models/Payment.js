@@ -108,6 +108,8 @@ const PaymentSchema = new mongoose.Schema(
 
 PaymentSchema.index({ order: 1, attempt: 1 });
 PaymentSchema.index({ status: 1, method: 1 });
+PaymentSchema.index({ "gateway.paymentId": 1 }, { unique: true, sparse: true });
+PaymentSchema.index({ "gateway.orderId": 1 }, { sparse: true });
 
 /* ================= COD AUTO HANDLING ================= */
 

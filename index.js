@@ -8,23 +8,27 @@ connectDB();
 
 const productRoutes = require("./routes/productRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
+const bannerRoutes = require("./routes/bannerRoutes");
 const authRoutes = require("./routes/authRoutes");
 const addressRoute = require("./routes/addressRoute");
 const orderRoute = require("./routes/orderRoute");
 const paymentRoute = require("./routes/paymentRoute");
 const cartRoute = require("./routes/cartRoute");
 const reviewRoute = require("./routes/reviewRoute");
-const adminRoutes = require("./routes/adminAuthRoutes");
+const adminAuthRoutes = require("./routes/adminAuthRoutes");
+const adminRoutes = require("./routes/adminRoutes");
+const sellerRoutes = require("./routes/sellerRoutes");
 
 const app = express();
 
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://localhost:3002"],
+    origin: ["http://localhost:3000", "http://localhost:3001"],
     credentials: true,
   }),
 );
 
+app.use("/payments/webhook/razorpay", express.raw({ type: "application/json" }));
 app.use(express.json());
 
 // 🔥 serve uploads FIRST
@@ -32,12 +36,15 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.use("/products", productRoutes);
 app.use("/categories", categoryRoutes);
+app.use("/banners", bannerRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/addresses", addressRoute);
 app.use("/orders", orderRoute);
 app.use("/payments", paymentRoute);
 app.use("/cart", cartRoute);
 app.use("/reviews", reviewRoute);
+app.use("/sellers", sellerRoutes);
+app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin", adminRoutes);
 
 app.get("/", (req, res) => {
