@@ -18,12 +18,13 @@ const reviewRoute = require("./routes/reviewRoute");
 const adminAuthRoutes = require("./routes/adminAuthRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const sellerRoutes = require("./routes/sellerRoutes");
+const dealSettingsRoutes = require("./routes/dealSettingsRoutes");
 
 const app = express();
 
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://localhost:3001"],
+    origin: ["http://localhost:3000", "http://localhost:3002"],
     credentials: true,
   }),
 );
@@ -46,6 +47,7 @@ app.use("/reviews", reviewRoute);
 app.use("/sellers", sellerRoutes);
 app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/deal-settings", dealSettingsRoutes);
 
 app.get("/", (req, res) => {
   res.send("VADI Backend running 🚀");
