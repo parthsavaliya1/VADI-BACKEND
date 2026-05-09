@@ -16,6 +16,10 @@ const TWO_FACTOR_API_KEY = process.env.TWO_FACTOR_API_KEY;
 const DUMMY_PHONE = process.env.DUMMY_PHONE || "+919999999999";
 const DUMMY_OTP   = process.env.DUMMY_OTP   || "123456";
 
+// Demo/review account — can login without OTP (for Play Store review)
+// Set DEMO_PHONE in your .env to override defaults
+const DEMO_PHONE = process.env.DEMO_PHONE || DUMMY_PHONE;
+
 /* ────────────────────────────────────────────
    HELPERS
 ──────────────────────────────────────────── */
@@ -43,6 +47,10 @@ function normalizePhone(phone) {
  */
 function isDummyPhone(phone) {
   return normalizePhone(phone) === normalizePhone(DUMMY_PHONE);
+}
+
+function isDemoPhone(phone) {
+  return normalizePhone(phone) === normalizePhone(DEMO_PHONE);
 }
 
 /**
@@ -142,6 +150,10 @@ router.post("/send-otp", async (req, res) => {
       return res.status(400).json({ error: "Phone is required" });
     }
 
+    if (mode !== "signup" && mode !== "login") {
+      return res.status(400).json({ error: 'mode must be "signup" or "login"' });
+    }
+
     const normalizedPhone = normalizePhone(phone);
 
     if (!phone) {
@@ -149,6 +161,12 @@ router.post("/send-otp", async (req, res) => {
     }
 
     let user = await User.findOne({ phone: normalizedPhone });
+
+    // For login: DO NOT create placeholder users.
+    // If user doesn't exist, return immediately.
+    if (mode === "login" && !user) {
+      return res.status(404).json({ error: "Account not found. Please sign up." });
+    }
 
     // Block re-signup for already-registered numbers
     if (mode === "signup" && user && user.name && user.isPhoneVerified) {
@@ -158,7 +176,7 @@ router.post("/send-otp", async (req, res) => {
     }
 
     // Create a placeholder user so we can attach OTP before verification
-    if (!user) {
+    if (mode === "signup" && !user) {
       user = await User.create({ phone: normalizedPhone });
     }
 
@@ -273,6 +291,7 @@ router.post("/verify-otp", async (req, res) => {
     user.otpSessionId   = null;
     user.otpExpiresAt   = null;
     user.isPhoneVerified = true;
+    user.otpVerifiedAt  = new Date();
     user.lastLoginAt    = new Date();
 
     if (privacyPolicyAccepted === true) {
@@ -295,6 +314,51 @@ router.post("/verify-otp", async (req, res) => {
   } catch (err) {
     console.error("verify-otp error:", err);
     return res.status(500).json({ error: "OTP verification failed" });
+  }
+});
+
+/**
+ * POST /api/auth/demo-login
+ * Body: { phone }
+ *
+ * For Play Store review: allow a single demo number to login without OTP.
+ */
+router.post("/demo-login", async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: "Phone is required" });
+
+    const normalizedPhone = normalizePhone(phone);
+    if (!isDemoPhone(normalizedPhone)) {
+      return res.status(403).json({ error: "Demo login not allowed for this number" });
+    }
+
+    let user = await User.findOne({ phone: normalizedPhone });
+    if (!user) {
+      user = await User.create({
+        phone: normalizedPhone,
+        name: "Demo User",
+        role: "user",
+        isPhoneVerified: true,
+        otp: null,
+        otpExpiresAt: null,
+        otpVerifiedAt: new Date(),
+        lastLoginAt: new Date(),
+      });
+    } else {
+      user.isPhoneVerified = true;
+      if (!user.name) user.name = "Demo User";
+      user.otp = null;
+      user.otpExpiresAt = null;
+      user.otpVerifiedAt = new Date();
+      user.lastLoginAt = new Date();
+      await user.save();
+    }
+
+    return res.json({ success: true, user });
+  } catch (err) {
+    console.error("demo-login error:", err);
+    return res.status(500).json({ error: "Demo login failed" });
   }
 });
 
