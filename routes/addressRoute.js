@@ -1,5 +1,6 @@
 const express = require("express");
 const Address = require("../models/Address");
+const { assertDeliverableRajkotAddress } = require("../utils/deliveryZone");
 
 const router = express.Router();
 
@@ -151,13 +152,6 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Validate pincode (6 digits)
-    if (!/^\d{6}$/.test(pincode)) {
-      return res.status(400).json({
-        error: "Please provide a valid 6-digit pincode",
-      });
-    }
-
     // Check if user already has 3 addresses
     const count = await Address.countDocuments({ user });
 
@@ -198,6 +192,11 @@ router.post("/", async (req, res) => {
         type: "Point",
         coordinates: location.coordinates, // [lng, lat]
       };
+    }
+
+    const deliveryErr = assertDeliverableRajkotAddress(addressData);
+    if (deliveryErr) {
+      return res.status(400).json({ error: deliveryErr });
     }
 
     const address = await Address.create(addressData);
@@ -241,13 +240,6 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    // Validate pincode if provided
-    if (pincode && !/^\d{6}$/.test(pincode)) {
-      return res.status(400).json({
-        error: "Please provide a valid 6-digit pincode",
-      });
-    }
-
     // If setting this as default, unset other defaults
     if (isDefault && !address.isDefault) {
       await Address.updateMany(
@@ -276,6 +268,25 @@ router.put("/:id", async (req, res) => {
         type: "Point",
         coordinates: location.coordinates,
       };
+    }
+
+    const mergedLocation = address.location;
+    const deliveryErr = assertDeliverableRajkotAddress({
+      pincode: address.pincode,
+      city: address.city,
+      state: address.state,
+      location:
+        mergedLocation &&
+        mergedLocation.coordinates &&
+        mergedLocation.coordinates.length === 2
+          ? {
+              type: mergedLocation.type || "Point",
+              coordinates: mergedLocation.coordinates,
+            }
+          : undefined,
+    });
+    if (deliveryErr) {
+      return res.status(400).json({ error: deliveryErr });
     }
 
     await address.save();
