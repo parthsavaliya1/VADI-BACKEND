@@ -22,6 +22,12 @@ const UserSchema = new mongoose.Schema(
       type: String,
     },
 
+    /** 2factor.in session id when OTP is AUTOGEN (verify via VERIFY API instead of comparing otp) */
+    otpSessionId: {
+      type: String,
+      default: null,
+    },
+
     otpExpiresAt: {
       type: Date,
     },

@@ -46,22 +46,84 @@ function isDummyPhone(phone) {
 }
 
 /**
- * Send OTP via 2Factor API.
- * Docs: https://2factor.in/API/
- * Returns the session ID string on success, throws on failure.
+ * 2factor.in — try AUTOGEN first (recommended for OTP SMS), then manual OTP URL.
+ * @returns {{ kind: 'session', sessionId: string } | { kind: 'otp', otp: string }}
  */
-async function send2FactorOTP(phone, otp) {
-  const tenDigit = phone.replace(/^\+91/, ""); // 2factor expects 10 digits
-
-  const url = `https://2factor.in/API/V1/${process.env.TWO_FACTOR_API_KEY}/SMS/${tenDigit}/${otp}`;
-
-  const response = await axios.get(url);
-
-  if (response.data?.Status !== "Success") {
-    throw new Error(response.data?.Details || "2Factor OTP send failed");
+async function dispatch2FactorOtpSms(normalizedPhoneWith91) {
+  const key = TWO_FACTOR_API_KEY;
+  if (!key || typeof key !== "string" || !key.trim()) {
+    throw new Error("TWO_FACTOR_API_KEY missing in backend .env — SMS OTP cannot send");
   }
 
-  return response.data.Details; // session ID
+  const tenDigit = normalizedPhoneWith91.replace(/^\+91/, "");
+
+  /**
+   * AUTOGEN: 2Factor generates OTP and sends SMS.
+   * @see https://2factor.in – SMS OTP / AUTOGEN
+   */
+  try {
+    const autogenUrl = `https://2factor.in/API/V1/${key}/SMS/${tenDigit}/AUTOGEN`;
+    const autogenRes = await axios.get(autogenUrl);
+    const sessionId =
+      typeof autogenRes.data?.Details === "string"
+        ? autogenRes.data.Details
+        : "";
+
+    if (autogenRes.data?.Status === "Success" && sessionId) {
+      return { kind: "session", sessionId };
+    }
+    console.warn(
+      "2Factor AUTOGEN non-success:",
+      autogenRes.data || autogenRes.status
+    );
+  } catch (e) {
+    console.warn(
+      "2Factor AUTOGEN failed, trying manual OTP URL:",
+      e.response?.data || e.message || e
+    );
+  }
+
+  /** Manual: we generate OTP — some accounts only support transactional SMS this way */
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const manualUrl = `https://2factor.in/API/V1/${key}/SMS/${tenDigit}/${otp}`;
+  const response = await axios.get(manualUrl);
+
+  if (response.data?.Status !== "Success") {
+    const detail =
+      response.data?.Details ||
+      JSON.stringify(response.data || {}) ||
+      "2Factor manual OTP send failed";
+    throw new Error(detail);
+  }
+
+  return { kind: "otp", otp };
+}
+
+/** Verify OTP typed by user against an AUTOGEN session */
+async function verify2factorSession(sessionId, enteredOtp) {
+  const key = process.env.TWO_FACTOR_API_KEY || TWO_FACTOR_API_KEY;
+  const code = String(enteredOtp ?? "").replace(/\D/g, "").slice(0, 6);
+  if (!key || !sessionId || code.length !== 6) return false;
+
+  try {
+    const url = `https://2factor.in/API/V1/${key}/SMS/VERIFY/${sessionId}/${code}`;
+    const r = await axios.get(url);
+    return r.data?.Status === "Success";
+  } catch (e) {
+    console.warn("2Factor VERIFY error:", e.response?.data || e.message);
+    return false;
+  }
+}
+
+/**
+ * Compare OTP the user typed with what we saved when triggering SMS via 2Factor.
+ * The SMS body contains the same OTP as `user.otp` (stored in send-otp).
+ * (Separate 2factor "VERIFY" session endpoints are unused here because we persist the code.)
+ */
+function enteredOtpMatchesStored(storedOtp, enteredRaw) {
+  const entered = String(enteredRaw ?? "").replace(/\D/g, "").slice(0, 6);
+  if (!entered || entered.length !== 6) return false;
+  return String(storedOtp ?? "") === entered;
 }
 
 /* ────────────────────────────────────────────
@@ -74,7 +136,7 @@ async function send2FactorOTP(phone, otp) {
  */
 router.post("/send-otp", async (req, res) => {
   try {
-    const { phone, mode } = req.body;
+    const { phone, mode, forceResend } = req.body;
 
     if (!phone) {
       return res.status(400).json({ error: "Phone is required" });
@@ -102,8 +164,9 @@ router.post("/send-otp", async (req, res) => {
 
     // ── Dummy account: skip real OTP ──────────────────────────────────
     if (isDummyPhone(normalizedPhone)) {
-      user.otp          = DUMMY_OTP;
-      user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+      user.otp            = DUMMY_OTP;
+      user.otpSessionId   = null;
+      user.otpExpiresAt   = new Date(Date.now() + 10 * 60 * 1000); // 10 min
       await user.save();
 
       console.log(`[DEV] Dummy OTP for ${normalizedPhone}: ${DUMMY_OTP}`);
@@ -116,25 +179,50 @@ router.post("/send-otp", async (req, res) => {
       });
     }
 
-    // ── Real account: don't regenerate if a valid OTP already exists ──
-    if (user.otp && user.otpExpiresAt > new Date()) {
+    const bypassCooldown =
+      forceResend === true ||
+      forceResend === "true";
+
+    /**
+     * Without forceResend, avoid spamming SMS. With forceResend (app "Resend OTP"),
+     * send a fresh code even if the previous one hasn't expired yet.
+     */
+    const stillValidExpiry =
+      user.otpExpiresAt && new Date(user.otpExpiresAt) > new Date();
+
+    if (
+      !bypassCooldown &&
+      (user.otp || user.otpSessionId) &&
+      stillValidExpiry
+    ) {
       return res.json({ success: true, message: "OTP already sent" });
     }
 
-    // Generate fresh OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const dispatched = await dispatch2FactorOtpSms(normalizedPhone);
 
-    // Send via 2Factor
-    await send2FactorOTP(normalizedPhone, otp);
+    if (dispatched.kind === "session") {
+      user.otp          = null;
+      user.otpSessionId = dispatched.sessionId;
+    } else {
+      user.otp          = dispatched.otp;
+      user.otpSessionId = null;
+    }
 
-    user.otp          = otp;
     user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min
     await user.save();
 
     return res.json({ success: true });
   } catch (err) {
     console.error("send-otp error:", err.response?.data || err.message);
-    return res.status(500).json({ error: "Failed to send OTP" });
+    const detail =
+      (err.response?.data?.Details && String(err.response.data.Details)) ||
+      err.message ||
+      "";
+    const msg =
+      detail && String(detail).length && String(detail).length < 200
+        ? `Failed to send OTP: ${detail}`
+        : "Failed to send OTP";
+    return res.status(500).json({ error: msg });
   }
 });
 
@@ -153,16 +241,26 @@ router.post("/verify-otp", async (req, res) => {
     const normalizedPhone = normalizePhone(phone);
     const user = await User.findOne({ phone: normalizedPhone });
 
-    if (!user || !user.otp || !user.otpExpiresAt) {
+    const hasChallenge =
+      user &&
+      user.otpExpiresAt &&
+      (user.otp || user.otpSessionId);
+
+    if (!hasChallenge || !user) {
       return res.status(400).json({ error: "OTP not found. Request again." });
     }
 
-    if (user.otpExpiresAt < new Date()) {
+    if (new Date(user.otpExpiresAt) < new Date()) {
       return res.status(400).json({ error: "OTP expired" });
     }
 
-    // Verify with 2Factor using phone + user-entered OTP
-    const isValid = await verifyOtpVia2Factor(normalizedPhone, otp);
+    let isValid = false;
+    if (user.otpSessionId) {
+      isValid = await verify2factorSession(user.otpSessionId, otp);
+    }
+    if (!isValid) {
+      isValid = enteredOtpMatchesStored(user.otp, otp);
+    }
 
     if (!isValid) {
       user.otpAttempts = (user.otpAttempts || 0) + 1;
@@ -172,6 +270,7 @@ router.post("/verify-otp", async (req, res) => {
 
     // Clear OTP fields
     user.otp            = null;
+    user.otpSessionId   = null;
     user.otpExpiresAt   = null;
     user.isPhoneVerified = true;
     user.lastLoginAt    = new Date();
