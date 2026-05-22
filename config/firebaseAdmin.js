@@ -2,9 +2,14 @@ const admin = require("firebase-admin");
 
 let firebaseApp = null;
 
-function getFirebaseMessaging() {
+function ensureFirebaseApp() {
   if (firebaseApp) {
-    return admin.messaging(firebaseApp);
+    return firebaseApp;
+  }
+
+  if (admin.apps.length > 0) {
+    firebaseApp = admin.app();
+    return firebaseApp;
   }
 
   const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -25,7 +30,12 @@ function getFirebaseMessaging() {
     }),
   });
 
-  return admin.messaging(firebaseApp);
+  return firebaseApp;
 }
 
-module.exports = { getFirebaseMessaging };
+function getFirebaseMessaging() {
+  const app = ensureFirebaseApp();
+  return admin.messaging(app);
+}
+
+module.exports = { getFirebaseMessaging, ensureFirebaseApp };

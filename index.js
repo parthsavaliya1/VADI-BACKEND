@@ -10,6 +10,7 @@ const productRoutes = require("./routes/productRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
 const bannerRoutes = require("./routes/bannerRoutes");
 const authRoutes = require("./routes/authRoutes");
+const userRoutes = require("./routes/userRoutes");
 const addressRoute = require("./routes/addressRoute");
 const orderRoute = require("./routes/orderRoute");
 const paymentRoute = require("./routes/paymentRoute");
@@ -19,6 +20,9 @@ const adminAuthRoutes = require("./routes/adminAuthRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const sellerRoutes = require("./routes/sellerRoutes");
 const dealSettingsRoutes = require("./routes/dealSettingsRoutes");
+const homeSectionSettingsRoutes = require("./routes/homeSectionSettingsRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
+const appConfigRoutes = require("./routes/appConfigRoutes");
 
 const app = express();
 
@@ -32,6 +36,9 @@ app.use(
 app.use("/payments/webhook/razorpay", express.raw({ type: "application/json" }));
 app.use(express.json());
 
+// Bootstrap: app reads Remote Config via Admin (RN cannot use Firebase JS Remote Config)
+app.use(appConfigRoutes);
+
 // 🔥 serve uploads FIRST
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
@@ -39,6 +46,7 @@ app.use("/products", productRoutes);
 app.use("/categories", categoryRoutes);
 app.use("/banners", bannerRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/users", userRoutes);
 app.use("/addresses", addressRoute);
 app.use("/orders", orderRoute);
 app.use("/payments", paymentRoute);
@@ -48,12 +56,14 @@ app.use("/sellers", sellerRoutes);
 app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/deal-settings", dealSettingsRoutes);
+app.use("/home-section-settings", homeSectionSettingsRoutes);
+app.use("/notifications", notificationRoutes);
 
 app.get("/", (req, res) => {
   res.send("VADI Backend running 🚀");
 });
 
-const PORT = process.env.PORT || 8000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

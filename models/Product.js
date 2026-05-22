@@ -188,6 +188,12 @@ const ProductSchema = new mongoose.Schema(
       index: true,
     },
 
+    /** Optional per-product offer deadline (shown in app). Overrides global deal timer when set. */
+    offerEndsAt: {
+      type: Date,
+      default: null,
+    },
+
     rating: {
       type: Number,
       default: 0,

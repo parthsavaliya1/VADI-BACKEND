@@ -213,6 +213,14 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
       });
     }
 
+    const sentBy = req.admin?.id || null;
+    const baseFields = {
+      title: String(title),
+      body: String(body),
+      imageUrl: imageUrl ? String(imageUrl) : "",
+      sentBy,
+    };
+
     const users = await User.find({
       pushToken: { $exists: true, $ne: null, $ne: "" },
     }).select("pushToken");
@@ -220,10 +228,25 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
     const tokens = [...new Set(users.map((user) => user.pushToken).filter(Boolean))];
 
     if (!tokens.length) {
+      const notificationDoc = await Notification.create({
+        ...baseFields,
+        stats: {
+          totalTokens: 0,
+          successCount: 0,
+          failureCount: 0,
+          invalidTokensRemoved: 0,
+        },
+      });
       return res.json({
         success: true,
-        message: "No user push tokens found",
-        stats: { totalTokens: 0, successCount: 0, failureCount: 0 },
+        message: "Notification saved; no user push tokens to deliver",
+        data: notificationDoc,
+        stats: {
+          totalTokens: 0,
+          successCount: 0,
+          failureCount: 0,
+          invalidTokensRemoved: 0,
+        },
       });
     }
 
@@ -253,9 +276,19 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
           },
         );
       }
+      const notificationDoc = await Notification.create({
+        ...baseFields,
+        stats: {
+          totalTokens: tokens.length,
+          successCount: 0,
+          failureCount: tokens.length,
+          invalidTokensRemoved: invalidTokens.size,
+        },
+      });
       return res.json({
         success: true,
-        message: "No valid Firebase push tokens found",
+        message: "Notification saved; no valid Firebase push tokens",
+        data: notificationDoc,
         stats: {
           totalTokens: tokens.length,
           successCount: 0,
@@ -271,20 +304,46 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
     let successCount = 0;
     let failureCount = 0;
 
+    const notificationTitle = String(title);
+    const notificationBody = String(body);
+    const imageUrlStr = imageUrl ? String(imageUrl) : "";
+
     for (let i = 0; i < validFcmTokens.length; i += chunkSize) {
       const tokenChunk = validFcmTokens.slice(i, i + chunkSize);
-      const response = await messaging.sendEachForMulticast({
+      const multicast = {
         tokens: tokenChunk,
         notification: {
-          title: String(title),
-          body: String(body),
-          ...(imageUrl ? { imageUrl: String(imageUrl) } : {}),
+          title: notificationTitle,
+          body: notificationBody,
+          ...(imageUrlStr ? { imageUrl: imageUrlStr } : {}),
         },
         data: {
           clickAction: "open_notifications",
-          ...(imageUrl ? { imageUrl: String(imageUrl) } : {}),
+          ...(imageUrlStr ? { imageUrl: imageUrlStr } : {}),
         },
-      });
+        android: {
+          priority: "high",
+          notification: {
+            channelId: "default",
+            sound: "default",
+            visibility: "public",
+            ...(imageUrlStr ? { imageUrl: imageUrlStr } : {}),
+          },
+        },
+        apns: {
+          headers: {
+            "apns-priority": "10",
+          },
+          payload: {
+            aps: {
+              sound: "default",
+              ...(imageUrlStr ? { mutableContent: true } : {}),
+            },
+          },
+        },
+      };
+
+      const response = await messaging.sendEachForMulticast(multicast);
 
       successCount += response.successCount;
       failureCount += response.failureCount;
@@ -315,16 +374,13 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
     }
 
     const notificationDoc = await Notification.create({
-      title: String(title),
-      body: String(body),
-      imageUrl: imageUrl ? String(imageUrl) : "",
+      ...baseFields,
       stats: {
         totalTokens: tokens.length,
         successCount,
         failureCount: failureCount + (tokens.length - validFcmTokens.length),
         invalidTokensRemoved: invalidTokens.size,
       },
-      sentBy: req.admin?.id || null,
     });
 
     return res.json({

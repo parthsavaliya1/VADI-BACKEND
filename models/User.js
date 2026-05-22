@@ -82,6 +82,12 @@ const UserSchema = new mongoose.Schema(
       type: Date,
     },
 
+    /** Broadcast notification docs (admin) this user has marked as read in the app */
+    readBroadcastNotificationIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Notification" }],
+      default: [],
+    },
+
     privacyPolicyAccepted: {
       type: Boolean,
       default: false,

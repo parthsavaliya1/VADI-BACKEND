@@ -254,11 +254,10 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    const product = await Product.findById(id).populate(
-      "category",
-      "name slug",
-    );
-    await product?.populate("seller.sellerId", "name code");
+    const product = await Product.findById(id)
+      .populate("category", "name slug")
+      .populate("seller.sellerId", "name code")
+      .lean();
 
     if (!product) {
       return res.status(404).json({
@@ -310,6 +309,7 @@ router.post("/", async (req, res) => {
       featured,
       trending,
       bestDeal,
+      offerEndsAt,
       isActive,
     } = req.body;
 
@@ -371,6 +371,18 @@ router.post("/", async (req, res) => {
       slug = `${slug}-${Date.now()}`;
     }
 
+    let parsedOfferEndsAt = null;
+    if (offerEndsAt !== undefined && offerEndsAt !== null && offerEndsAt !== "") {
+      const d = new Date(offerEndsAt);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid offer end date",
+        });
+      }
+      parsedOfferEndsAt = d;
+    }
+
     // Create product
     const product = new Product({
       name,
@@ -404,6 +416,7 @@ router.post("/", async (req, res) => {
       featured,
       trending,
       bestDeal,
+      offerEndsAt: parsedOfferEndsAt,
       isActive,
     });
 
@@ -466,6 +479,22 @@ router.put("/:id", async (req, res) => {
     }
 
     const updateData = { ...req.body };
+
+    if (Object.prototype.hasOwnProperty.call(updateData, "offerEndsAt")) {
+      const v = updateData.offerEndsAt;
+      if (v === null || v === "") {
+        updateData.offerEndsAt = null;
+      } else {
+        const d = new Date(v);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid offer end date",
+          });
+        }
+        updateData.offerEndsAt = d;
+      }
+    }
 
     if (updateData.seller) {
       const sellerId = updateData.seller?.sellerId || updateData.seller;
