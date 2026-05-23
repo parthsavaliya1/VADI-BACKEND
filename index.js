@@ -23,6 +23,7 @@ const dealSettingsRoutes = require("./routes/dealSettingsRoutes");
 const homeSectionSettingsRoutes = require("./routes/homeSectionSettingsRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const appConfigRoutes = require("./routes/appConfigRoutes");
+const driverAuthRoutes = require("./routes/driverAuthRoutes");
 
 const app = express();
 
@@ -58,6 +59,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/deal-settings", dealSettingsRoutes);
 app.use("/home-section-settings", homeSectionSettingsRoutes);
 app.use("/notifications", notificationRoutes);
+app.use("/api/driver", driverAuthRoutes);
 
 app.get("/", (req, res) => {
   res.send("VADI Backend running 🚀");

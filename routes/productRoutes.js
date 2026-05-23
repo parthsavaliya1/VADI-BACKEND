@@ -309,6 +309,7 @@ router.post("/", async (req, res) => {
       featured,
       trending,
       bestDeal,
+      isOrganic,
       offerEndsAt,
       isActive,
     } = req.body;
@@ -416,6 +417,7 @@ router.post("/", async (req, res) => {
       featured,
       trending,
       bestDeal,
+      isOrganic: Boolean(isOrganic),
       offerEndsAt: parsedOfferEndsAt,
       isActive,
     });

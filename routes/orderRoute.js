@@ -4,8 +4,19 @@ const Order = require("../models/Orders"); // Adjust path as needed
 const Payment = require("../models/Payment"); // Adjust path as needed
 const Cart = require("../models/Cart"); // Adjust path as needed
 const Product = require("../models/Product"); // Adjust path as needed
+const User = require("../models/User");
 const mongoose = require("mongoose");
 const crypto = require("crypto");
+const {
+  generateHandoverCode,
+  encryptHandoverCode,
+  decryptHandoverCode,
+  normalizeCodeInput,
+  codesEqualTimingSafe,
+  MAX_WRONG_ATTEMPTS,
+} = require("../utils/deliveryHandover");
+const { buildOrderInvoicePdf } = require("../utils/orderInvoicePdf");
+const adminOrDriverMiddleware = require("../middleware/adminOrDriverMiddleware");
 
 /* ================= HELPER FUNCTIONS ================= */
 
@@ -404,6 +415,67 @@ router.get("/", async (req, res) => {
   }
 });
 
+/**
+ * @route   GET /orders/:id/invoice
+ * @desc    PDF invoice (delivered orders only). Query: userId (owner) OR isAdmin=true.
+ */
+router.get("/:id/invoice", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId, isAdmin } = req.query;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order ID format",
+      });
+    }
+
+    const order = await Order.findById(id)
+      .populate("items.product", "name image")
+      .lean();
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    if (order.status !== "delivered") {
+      return res.status(400).json({
+        success: false,
+        message: "Invoice is available only after the order is delivered",
+      });
+    }
+
+    const adminBypass = String(isAdmin).toLowerCase() === "true";
+    const ownerOk =
+      userId && order.user.toString() === String(userId).trim();
+    if (!ownerOk && !adminBypass) {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized to download this invoice",
+      });
+    }
+
+    const buf = await buildOrderInvoicePdf(order);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="VADI-Invoice-${order.orderNumber || id}.pdf"`,
+    );
+    return res.send(buf);
+  } catch (error) {
+    console.error("GET order invoice error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to generate invoice",
+      error: error.message,
+    });
+  }
+});
+
 /* ================= GET ORDER BY ID ================= */
 
 /**
@@ -423,10 +495,9 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    const order = await Order.findById(id).populate(
-      "items.product",
-      "name image",
-    );
+    const order = await Order.findById(id)
+      .select("+deliveryHandoverCipher")
+      .populate("items.product", "name image");
 
     if (!order) {
       return res.status(404).json({
@@ -443,13 +514,31 @@ router.get("/:id", async (req, res) => {
       });
     }
 
+    const orderPayload = order.toObject();
+    delete orderPayload.deliveryHandoverCipher;
+
+    const ownerRequested =
+      userId && order.user.toString() === userId && order.status === "out_for_delivery";
+    if (
+      ownerRequested &&
+      !order.deliveryHandoverVerifiedAt &&
+      order.deliveryHandoverCipher
+    ) {
+      try {
+        const code = decryptHandoverCode(order.deliveryHandoverCipher);
+        if (code) orderPayload.deliveryHandoverCode = code;
+      } catch (e) {
+        console.error("Decrypt handover code error:", e.message);
+      }
+    }
+
     // Get payment details
     const payment = await Payment.findOne({ order: order._id }).lean();
 
     res.json({
       success: true,
       data: {
-        order,
+        order: orderPayload,
         payment,
       },
     });
@@ -537,6 +626,7 @@ router.put("/:id/status", async (req, res) => {
       "placed",
       "confirmed",
       "packed",
+      "shipped",
       "out_for_delivery",
       "delivered",
       "cancelled",
@@ -550,7 +640,7 @@ router.put("/:id/status", async (req, res) => {
       });
     }
 
-    const order = await Order.findById(id);
+    const order = await Order.findById(id).select("+deliveryHandoverCipher");
 
     if (!order) {
       return res.status(404).json({
@@ -567,11 +657,51 @@ router.put("/:id/status", async (req, res) => {
       });
     }
 
+    const prevStatus = order.status;
+
+    if (status === "delivered") {
+      if (order.deliveryHandoverGeneratedAt && !order.deliveryHandoverVerifiedAt) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Verify the customer's 6-digit delivery code before marking this order as delivered.",
+        });
+      }
+    }
+
     const updateData = { status };
+
+    /** Handover code is app-only (order tracking); SMS is not sent. */
+    if (status === "out_for_delivery" && prevStatus !== "out_for_delivery") {
+      const plain = generateHandoverCode();
+      updateData.deliveryHandoverCipher = encryptHandoverCode(plain);
+      updateData.deliveryHandoverGeneratedAt = new Date();
+      updateData.deliveryHandoverWrongAttempts = 0;
+      updateData.deliveryHandoverVerifiedAt = null;
+      updateData.deliveryHandoverVerifiedByDriver = null;
+    }
+
+    if (
+      prevStatus === "out_for_delivery" &&
+      status !== "out_for_delivery" &&
+      status !== "delivered"
+    ) {
+      updateData.deliveryHandoverCipher = null;
+      updateData.deliveryHandoverGeneratedAt = null;
+      updateData.deliveryHandoverWrongAttempts = 0;
+      updateData.deliveryHandoverVerifiedAt = null;
+      updateData.deliveryHandoverVerifiedByDriver = null;
+    }
 
     // Handle delivery
     if (status === "delivered") {
       updateData.deliveredAt = new Date();
+      updateData.deliveryHandoverCipher = null;
+      updateData.deliveryHandoverWrongAttempts = 0;
+
+      if (order.deliveryHandoverVerifiedByDriver) {
+        updateData.deliveredByDriver = order.deliveryHandoverVerifiedByDriver;
+      }
 
       // For COD, mark payment as success when delivered
       if (order.payment.isCod) {
@@ -616,6 +746,152 @@ router.put("/:id/status", async (req, res) => {
   }
 });
 
+/**
+ * Resolve :id for handover verify — MongoDB ObjectId (24 hex) OR orderNumber (e.g. ORD23908068615, #ORD…).
+ * @route   POST /api/orders/:id/verify-delivery-handover
+ * @desc    Confirm the 6-digit code the customer shared with delivery staff
+ * @access  Private (Admin JWT or driver JWT)
+ */
+router.post(
+  "/:id/verify-delivery-handover",
+  adminOrDriverMiddleware,
+  async (req, res) => {
+    try {
+    const rawRef = decodeURIComponent(String(req.params.id || "").trim());
+    const ref = rawRef.replace(/^#/, "").trim();
+    const { code } = req.body;
+
+      let order = null;
+      if (/^[a-fA-F0-9]{24}$/.test(ref)) {
+        order = await Order.findById(ref).select("+deliveryHandoverCipher");
+      } else if (ref.length >= 3 && ref.length <= 64) {
+        order = await Order.findOne({
+          orderNumber: new RegExp(`^${ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+        }).select("+deliveryHandoverCipher");
+      }
+
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message: "Order not found. Use order number (e.g. ORD…) or the ID from the admin order URL.",
+        });
+      }
+
+      const orderIdStr = order._id.toString();
+
+      if (order.status !== "out_for_delivery") {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Handover code can only be verified while the order is out for delivery",
+        });
+      }
+
+      if (!order.deliveryHandoverCipher) {
+        return res.status(400).json({
+          success: false,
+          message: "No active delivery handover code for this order",
+        });
+      }
+
+      if (order.deliveryHandoverVerifiedAt) {
+        return res.status(400).json({
+          success: false,
+          message: "Delivery handover was already verified",
+        });
+      }
+
+      if (order.deliveryHandoverWrongAttempts >= MAX_WRONG_ATTEMPTS) {
+        return res.status(429).json({
+          success: false,
+          message:
+            "Too many incorrect attempts. Contact support or regenerate by updating status.",
+        });
+      }
+
+      const entered = normalizeCodeInput(code);
+      if (entered.length !== 6) {
+        return res.status(400).json({
+          success: false,
+          message: "Enter the 6-digit code",
+        });
+      }
+
+      let expected;
+      try {
+        expected = decryptHandoverCode(order.deliveryHandoverCipher);
+      } catch (e) {
+        console.error("Handover decrypt error:", e.message);
+        return res.status(500).json({
+          success: false,
+          message: "Could not verify code",
+        });
+      }
+
+      if (!expected || !codesEqualTimingSafe(entered, expected)) {
+        await Order.findByIdAndUpdate(orderIdStr, {
+          $inc: { deliveryHandoverWrongAttempts: 1 },
+        });
+        return res.status(400).json({
+          success: false,
+          message: "Invalid code",
+        });
+      }
+
+      const driverId = req.driver?.id
+        ? new mongoose.Types.ObjectId(req.driver.id)
+        : null;
+
+      /** Completing delivery: correct code ⇒ mark delivered (driver gets credit when they verified). */
+      const finalizeUpdate = {
+        deliveryHandoverVerifiedAt: new Date(),
+        deliveryHandoverCipher: null,
+        deliveryHandoverWrongAttempts: 0,
+        deliveryHandoverVerifiedByDriver: driverId,
+        status: "delivered",
+        deliveredAt: new Date(),
+        deliveredByDriver: driverId,
+      };
+
+      if (order.payment?.isCod) {
+        finalizeUpdate["payment.status"] = "paid";
+        finalizeUpdate["payment.codCollected"] = true;
+        finalizeUpdate["payment.paidAt"] = new Date();
+      }
+
+      const updatedOrder = await Order.findByIdAndUpdate(
+        orderIdStr,
+        finalizeUpdate,
+        { new: true, runValidators: true },
+      ).populate("items.product", "name image");
+
+      if (order.payment?.isCod) {
+        await Payment.findOneAndUpdate(
+          { order: order._id },
+          {
+            status: "success",
+            codCollected: true,
+            collectedAt: new Date(),
+          },
+        );
+      }
+
+      return res.json({
+        success: true,
+        message: "Code verified — order marked as delivered.",
+        data: updatedOrder,
+      });
+    } catch (error) {
+      console.error("Verify delivery handover error:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to verify handover code",
+        error: error.message,
+      });
+    }
+  },
+);
+
 /* ================= CANCEL ORDER ================= */
 
 /**
@@ -639,7 +915,9 @@ router.post("/:id/cancel", async (req, res) => {
       });
     }
 
-    const order = await Order.findById(id).session(session);
+    const order = await Order.findById(id)
+      .select("+deliveryHandoverCipher")
+      .session(session);
 
     if (!order) {
       await session.abortTransaction();
@@ -681,6 +959,11 @@ router.post("/:id/cancel", async (req, res) => {
     order.cancelledAt = new Date();
     order.cancelReason = reason;
     order.payment.status = "cancelled";
+    order.deliveryHandoverVerifiedAt = null;
+    order.deliveryHandoverVerifiedByDriver = null;
+    order.deliveryHandoverCipher = null;
+    order.deliveryHandoverGeneratedAt = null;
+    order.deliveryHandoverWrongAttempts = 0;
 
     await order.save({ session });
 

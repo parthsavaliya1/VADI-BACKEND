@@ -1,0 +1,29 @@
+const mongoose = require("mongoose");
+
+const DriverSchema = new mongoose.Schema(
+  {
+    phone: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+      index: true,
+    },
+    name: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    otp: { type: String, default: null },
+    otpSessionId: { type: String, default: null },
+    otpExpiresAt: { type: Date, default: null },
+    otpAttempts: { type: Number, default: 0 },
+  },
+  { timestamps: true },
+);
+
+module.exports = mongoose.model("Driver", DriverSchema);

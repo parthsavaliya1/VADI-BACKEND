@@ -209,6 +209,7 @@ const OrderSchema = new mongoose.Schema(
         "placed",
         "confirmed",
         "packed",
+        "shipped",
         "out_for_delivery",
         "delivered",
         "cancelled",
@@ -222,6 +223,47 @@ const OrderSchema = new mongoose.Schema(
     cancelReason: String,
 
     deliveredAt: Date,
+
+    /**
+     * Delivery handover (6-digit code): generated when status → out_for_delivery (in-app only; no SMS).
+     * Encrypted at rest; customer sees decrypted value only via GET order as owner.
+     * Admin/driver verifies with POST /orders/:id/verify-delivery-handover before marking delivered.
+     */
+    deliveryHandoverCipher: {
+      type: String,
+      select: false,
+      default: null,
+    },
+
+    deliveryHandoverGeneratedAt: {
+      type: Date,
+      default: null,
+    },
+
+    deliveryHandoverWrongAttempts: {
+      type: Number,
+      default: 0,
+    },
+
+    deliveryHandoverVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+
+    /** Set when a driver (not admin) verifies the handover OTP */
+    deliveryHandoverVerifiedByDriver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Driver",
+      default: null,
+    },
+
+    /** Filled when order is marked delivered — attribution for driver portal */
+    deliveredByDriver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Driver",
+      default: null,
+      index: true,
+    },
 
     /* ================= META ================= */
 

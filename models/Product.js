@@ -188,6 +188,13 @@ const ProductSchema = new mongoose.Schema(
       index: true,
     },
 
+    /** When true, consumer app shows an organic label on the product detail screen. */
+    isOrganic: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
     /** Optional per-product offer deadline (shown in app). Overrides global deal timer when set. */
     offerEndsAt: {
       type: Date,

@@ -1,6 +1,11 @@
 const express = require("express");
-const axios = require("axios");
 const User = require("../models/User");
+const {
+  normalizePhone,
+  dispatch2FactorOtpSms,
+  verify2factorSession,
+  enteredOtpMatchesStored,
+} = require("../utils/twoFactorSms");
 
 const router = express.Router();
 
@@ -9,7 +14,6 @@ const router = express.Router();
 ──────────────────────────────────────────── */
 
 const ADMIN_PHONE = "+919909049699";
-const TWO_FACTOR_API_KEY = process.env.TWO_FACTOR_API_KEY;
 
 // Dummy / test account — bypasses real OTP
 // Set DUMMY_PHONE and DUMMY_OTP in your .env to override defaults
@@ -25,24 +29,6 @@ const DEMO_PHONE = process.env.DEMO_PHONE || DUMMY_PHONE;
 ──────────────────────────────────────────── */
 
 /**
- * Normalise any phone input → "+91XXXXXXXXXX"
- */
-function normalizePhone(phone) {
-  const digits = phone.replace(/\D/g, "");
-  // already has country code
-  if (digits.length === 12 && digits.startsWith("91")) {
-    return `+${digits}`;
-  }
-  // bare 10-digit
-  if (digits.length === 10) {
-    return `+91${digits}`;
-  }
-  // already "+91..."
-  if (phone.startsWith("+91")) return phone;
-  return `+91${digits}`;
-}
-
-/**
  * Returns true for the dummy/test account.
  */
 function isDummyPhone(phone) {
@@ -51,87 +37,6 @@ function isDummyPhone(phone) {
 
 function isDemoPhone(phone) {
   return normalizePhone(phone) === normalizePhone(DEMO_PHONE);
-}
-
-/**
- * 2factor.in — try AUTOGEN first (recommended for OTP SMS), then manual OTP URL.
- * @returns {{ kind: 'session', sessionId: string } | { kind: 'otp', otp: string }}
- */
-async function dispatch2FactorOtpSms(normalizedPhoneWith91) {
-  const key = TWO_FACTOR_API_KEY;
-  if (!key || typeof key !== "string" || !key.trim()) {
-    throw new Error("TWO_FACTOR_API_KEY missing in backend .env — SMS OTP cannot send");
-  }
-
-  const tenDigit = normalizedPhoneWith91.replace(/^\+91/, "");
-
-  /**
-   * AUTOGEN: 2Factor generates OTP and sends SMS.
-   * @see https://2factor.in – SMS OTP / AUTOGEN
-   */
-  try {
-    const autogenUrl = `https://2factor.in/API/V1/${key}/SMS/${tenDigit}/AUTOGEN`;
-    const autogenRes = await axios.get(autogenUrl);
-    const sessionId =
-      typeof autogenRes.data?.Details === "string"
-        ? autogenRes.data.Details
-        : "";
-
-    if (autogenRes.data?.Status === "Success" && sessionId) {
-      return { kind: "session", sessionId };
-    }
-    console.warn(
-      "2Factor AUTOGEN non-success:",
-      autogenRes.data || autogenRes.status
-    );
-  } catch (e) {
-    console.warn(
-      "2Factor AUTOGEN failed, trying manual OTP URL:",
-      e.response?.data || e.message || e
-    );
-  }
-
-  /** Manual: we generate OTP — some accounts only support transactional SMS this way */
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const manualUrl = `https://2factor.in/API/V1/${key}/SMS/${tenDigit}/${otp}`;
-  const response = await axios.get(manualUrl);
-
-  if (response.data?.Status !== "Success") {
-    const detail =
-      response.data?.Details ||
-      JSON.stringify(response.data || {}) ||
-      "2Factor manual OTP send failed";
-    throw new Error(detail);
-  }
-
-  return { kind: "otp", otp };
-}
-
-/** Verify OTP typed by user against an AUTOGEN session */
-async function verify2factorSession(sessionId, enteredOtp) {
-  const key = process.env.TWO_FACTOR_API_KEY || TWO_FACTOR_API_KEY;
-  const code = String(enteredOtp ?? "").replace(/\D/g, "").slice(0, 6);
-  if (!key || !sessionId || code.length !== 6) return false;
-
-  try {
-    const url = `https://2factor.in/API/V1/${key}/SMS/VERIFY/${sessionId}/${code}`;
-    const r = await axios.get(url);
-    return r.data?.Status === "Success";
-  } catch (e) {
-    console.warn("2Factor VERIFY error:", e.response?.data || e.message);
-    return false;
-  }
-}
-
-/**
- * Compare OTP the user typed with what we saved when triggering SMS via 2Factor.
- * The SMS body contains the same OTP as `user.otp` (stored in send-otp).
- * (Separate 2factor "VERIFY" session endpoints are unused here because we persist the code.)
- */
-function enteredOtpMatchesStored(storedOtp, enteredRaw) {
-  const entered = String(enteredRaw ?? "").replace(/\D/g, "").slice(0, 6);
-  if (!entered || entered.length !== 6) return false;
-  return String(storedOtp ?? "") === entered;
 }
 
 /* ────────────────────────────────────────────

@@ -3,6 +3,8 @@ const router = express.Router();
 const User = require("../models/User");
 const mongoose = require("mongoose");
 const adminAuth = require("../middleware/adminMiddleware");
+const Driver = require("../models/Driver");
+const { normalizePhone } = require("../utils/twoFactorSms");
 const { getFirebaseMessaging } = require("../config/firebaseAdmin");
 const Banner = require("../models/Banner");
 const Notification = require("../models/Notification");
@@ -597,6 +599,66 @@ router.delete("/banners/:id", adminAuth, async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to delete banner",
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/admin/drivers
+ * Register a delivery driver (phone OTP login in driver app).
+ */
+router.post("/drivers", adminAuth, async (req, res) => {
+  try {
+    const { phone, name } = req.body;
+    if (!phone) {
+      return res.status(400).json({ success: false, message: "Phone is required" });
+    }
+    const normalized = normalizePhone(phone);
+    const existing = await Driver.findOne({ phone: normalized });
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: "Driver with this phone already exists",
+        data: { id: existing._id },
+      });
+    }
+    const driver = await Driver.create({
+      phone: normalized,
+      name: name ? String(name).trim() : "",
+      isActive: true,
+    });
+    return res.status(201).json({
+      success: true,
+      message:
+        "Driver created. They can sign in at /driver/login (same site as admin).",
+      data: { id: driver._id, phone: driver.phone, name: driver.name },
+    });
+  } catch (error) {
+    console.error("Create driver error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to create driver",
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/admin/drivers
+ */
+router.get("/drivers", adminAuth, async (req, res) => {
+  try {
+    const drivers = await Driver.find()
+      .select("-otp -otpSessionId -otpExpiresAt")
+      .sort({ createdAt: -1 })
+      .lean();
+    return res.json({ success: true, data: drivers });
+  } catch (error) {
+    console.error("List drivers error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to list drivers",
       error: error.message,
     });
   }
