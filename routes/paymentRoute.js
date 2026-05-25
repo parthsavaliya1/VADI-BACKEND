@@ -339,11 +339,7 @@ router.post("/verify-signature", async (req, res) => {
     }
 
     const payment = await razorpay.payments.fetch(razorpayPaymentId);
-    if (
-      payment?.status !== "captured" &&
-      payment?.status !== "authorized" &&
-      payment?.status !== "created"
-    ) {
+    if (payment?.status !== "captured" && payment?.status !== "authorized") {
       return res.status(400).json({
         success: false,
         message: `Unexpected payment status: ${payment?.status || "unknown"}`,
@@ -552,6 +548,13 @@ router.post("/initiate", async (req, res) => {
  */
 router.post("/verify", async (req, res) => {
   try {
+    if (!razorpayKeySecret) {
+      return res.status(500).json({
+        success: false,
+        message: "Razorpay secret is not configured",
+      });
+    }
+
     const {
       paymentId,
       orderId,
@@ -577,10 +580,22 @@ router.post("/verify", async (req, res) => {
       });
     }
 
-    // Here you would verify the signature with your payment gateway
-    // For Razorpay: verify using razorpay_payment_id, razorpay_order_id, razorpay_signature
+    const gatewayOrderIdFromBody = gatewayOrderId || payment.gateway?.orderId;
+    const gatewayPaymentIdFromBody = gatewayPaymentId || payment.gateway?.paymentId;
 
-    const isSignatureValid = true; // Replace with actual signature verification
+    if (!gatewayOrderIdFromBody || !gatewayPaymentIdFromBody || !signature) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "gatewayOrderId (Razorpay order id), gatewayPaymentId (Razorpay payment id), and signature are required",
+      });
+    }
+
+    const isSignatureValid = verifyRazorpaySignature({
+      orderId: gatewayOrderIdFromBody,
+      paymentId: gatewayPaymentIdFromBody,
+      signature,
+    });
 
     if (!isSignatureValid) {
       payment.status = "failed";
@@ -595,17 +610,21 @@ router.post("/verify", async (req, res) => {
 
     // Update payment status
     payment.status = "success";
-    payment.gateway.paymentId = gatewayPaymentId;
-    payment.gateway.orderId = gatewayOrderId;
+    payment.gateway = payment.gateway || {};
+    payment.gateway.name = payment.gateway.name || "razorpay";
+    payment.gateway.paymentId = gatewayPaymentIdFromBody;
+    payment.gateway.orderId = gatewayOrderIdFromBody;
     payment.gateway.signature = signature;
-    payment.gateway.response = gatewayResponse;
+    if (gatewayResponse) {
+      payment.gateway.response = gatewayResponse;
+    }
 
     await payment.save();
 
     // Update order
     await Order.findByIdAndUpdate(orderId, {
       "payment.status": "paid",
-      "payment.transactionId": gatewayPaymentId,
+      "payment.transactionId": gatewayPaymentIdFromBody,
       "payment.paidAt": new Date(),
       status: "confirmed",
     });
