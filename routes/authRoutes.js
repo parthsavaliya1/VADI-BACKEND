@@ -15,6 +15,10 @@ const router = express.Router();
 
 const ADMIN_PHONE = "+919909049699";
 
+// Official numbers — skip SMS and use fixed OTP for login
+const DEFAULT_OTP_PHONES = ["9909049699", "9662089386"];
+const DEFAULT_OTP = "111298";
+
 // Dummy / test account — bypasses real OTP
 // Set DUMMY_PHONE and DUMMY_OTP in your .env to override defaults
 const DUMMY_PHONE = process.env.DUMMY_PHONE || "+919999999999";
@@ -33,6 +37,11 @@ const DEMO_PHONE = process.env.DEMO_PHONE || DUMMY_PHONE;
  */
 function isDummyPhone(phone) {
   return normalizePhone(phone) === normalizePhone(DUMMY_PHONE);
+}
+
+function isDefaultOtpPhone(phone) {
+  const digits = normalizePhone(phone).replace(/\D/g, "").slice(-10);
+  return DEFAULT_OTP_PHONES.includes(digits);
 }
 
 function isDemoPhone(phone) {
@@ -99,6 +108,22 @@ router.post("/send-otp", async (req, res) => {
         message: "OTP sent (dummy account)",
         // expose in dev/test so the frontend can auto-fill if needed
         ...(process.env.NODE_ENV !== "production" && { devOtp: DUMMY_OTP }),
+      });
+    }
+
+    // ── Official numbers: skip SMS, use fixed default OTP ─────────────
+    if (isDefaultOtpPhone(normalizedPhone)) {
+      user.otp            = DEFAULT_OTP;
+      user.otpSessionId   = null;
+      user.otpExpiresAt   = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+      await user.save();
+
+      console.log(`[DEV] Default OTP for ${normalizedPhone}: ${DEFAULT_OTP}`);
+
+      return res.json({
+        success: true,
+        message: "OTP sent (default account)",
+        ...(process.env.NODE_ENV !== "production" && { devOtp: DEFAULT_OTP }),
       });
     }
 
