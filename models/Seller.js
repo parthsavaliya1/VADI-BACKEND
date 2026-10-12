@@ -41,6 +41,12 @@ const SellerSchema = new mongoose.Schema(
       sparse: true,
       index: true,
     },
+    /** Omitted means the seller uses the admin default commission. */
+    commissionPercent: {
+      type: Number,
+      min: 0,
+      max: 100,
+    },
     status: {
       type: String,
       enum: ["pending", "approved", "rejected"],

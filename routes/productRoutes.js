@@ -32,7 +32,21 @@ const validateVariants = (variants) => {
     variants[0].isDefault = true;
   }
 
+  variants.forEach((variant) => {
+    variant.image =
+      typeof variant.image === "string" ? variant.image.trim() : "";
+  });
+
   return variants;
+};
+
+const coverImageFromVariants = (variants, fallback = "") => {
+  const explicit = typeof fallback === "string" ? fallback.trim() : "";
+  if (explicit) return explicit;
+  const preferred =
+    variants.find((variant) => variant.isDefault && variant.image) ||
+    variants.find((variant) => variant.image);
+  return preferred?.image || "";
 };
 
 /* ================= GET ALL PRODUCTS ================= */
@@ -318,6 +332,7 @@ router.post("/mine", async (req, res) => {
       mrp,
       stock,
       image,
+      variants: incomingVariants,
     } = req.body;
 
     if (!name || !category || !unit) {
@@ -341,14 +356,61 @@ router.post("/mine", async (req, res) => {
     }
 
     const allowedUnits = ["kg", "g", "litre", "ml", "pcs"];
-    const variantUnit = allowedUnits.includes(packUnit) ? packUnit : "pcs";
-    const salePrice = Number(price);
-    const listPrice = Number(mrp || price);
-    const qty = Number(stock);
-    if (!salePrice || salePrice <= 0 || !listPrice || listPrice < salePrice || qty < 0 || Number.isNaN(qty)) {
+    const sourceVariants =
+      Array.isArray(incomingVariants) && incomingVariants.length
+        ? incomingVariants
+        : [
+            {
+              packSize,
+              packUnit,
+              price,
+              mrp,
+              stock,
+              image: "",
+              isDefault: true,
+            },
+          ];
+
+    let validatedVariants;
+    try {
+      validatedVariants = validateVariants(
+        sourceVariants.map((variant) => {
+          const salePrice = Number(variant.price);
+          const listPrice = Number(variant.mrp || variant.price);
+          const qty = Number(variant.stock);
+          const size = Number(variant.packSize);
+          if (
+            !salePrice ||
+            salePrice <= 0 ||
+            !listPrice ||
+            listPrice < salePrice ||
+            !size ||
+            size <= 0 ||
+            qty < 0 ||
+            Number.isNaN(qty)
+          ) {
+            throw new Error(
+              "Each variant needs a valid pack size, price, MRP, and stock",
+            );
+          }
+          return {
+            packSize: size,
+            packUnit: allowedUnits.includes(variant.packUnit)
+              ? variant.packUnit
+              : "pcs",
+            mrp: listPrice,
+            price: salePrice,
+            stock: qty,
+            image: typeof variant.image === "string" ? variant.image : "",
+            isDefault: Boolean(variant.isDefault),
+            isActive: variant.isActive !== false,
+          };
+        }),
+      );
+    } catch (error) {
       return res.status(400).json({
         success: false,
-        message: "Enter a valid price, MRP, and stock",
+        message: error.message,
       });
     }
 
@@ -370,18 +432,8 @@ router.post("/mine", async (req, res) => {
           area: sellerDoc.location?.area || "",
         },
       },
-      variants: [
-        {
-          packSize: Number(packSize) > 0 ? Number(packSize) : 1,
-          packUnit: variantUnit,
-          mrp: listPrice,
-          price: salePrice,
-          stock: qty,
-          isDefault: true,
-          isActive: true,
-        },
-      ],
-      image: image || "",
+      variants: validatedVariants,
+      image: coverImageFromVariants(validatedVariants, image),
       approvalStatus: "approved",
       isActive: true,
       featured: false,
@@ -539,7 +591,7 @@ router.post("/", async (req, res) => {
       tags,
       searchKeywords,
       variants: validatedVariants,
-      image,
+      image: coverImageFromVariants(validatedVariants, image),
       images,
       featured,
       trending,
@@ -677,6 +729,12 @@ router.put("/:id", async (req, res) => {
     if (updateData.variants) {
       try {
         updateData.variants = validateVariants(updateData.variants);
+        if (!updateData.image) {
+          updateData.image = coverImageFromVariants(
+            updateData.variants,
+            existingProduct.image,
+          );
+        }
       } catch (error) {
         return res.status(400).json({
           success: false,
@@ -783,6 +841,7 @@ router.post("/:id/variants", async (req, res) => {
       sku,
       isDefault,
       isActive,
+      image,
     } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -825,6 +884,7 @@ router.post("/:id/variants", async (req, res) => {
       stock,
       lowStockThreshold,
       sku,
+      image: typeof image === "string" ? image.trim() : "",
       isDefault: isDefault || false,
       isActive: isActive !== undefined ? isActive : true,
     });
@@ -892,6 +952,7 @@ router.put("/:id/variants/:variantId", async (req, res) => {
       sku,
       isDefault,
       isActive,
+      image,
     } = req.body;
 
     if (packSize !== undefined) variant.packSize = packSize;
@@ -902,6 +963,7 @@ router.put("/:id/variants/:variantId", async (req, res) => {
     if (lowStockThreshold !== undefined)
       variant.lowStockThreshold = lowStockThreshold;
     if (sku !== undefined) variant.sku = sku;
+    if (image !== undefined) variant.image = String(image || "").trim();
     if (isActive !== undefined) variant.isActive = isActive;
 
     // Handle default variant

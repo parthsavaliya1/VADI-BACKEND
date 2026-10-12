@@ -8,6 +8,12 @@ const Order = require("../models/Orders");
 const Payment = require("../models/Payment");
 const User = require("../models/User");
 const { decryptHandoverCode } = require("../utils/deliveryHandover");
+const SellerLedger = require("../models/SellerLedger");
+const {
+  getCommissionSettings,
+  settleUnsettledPaidOrders,
+} = require("../utils/commission");
+const { readFeeSettings, DRIVER_FEE_MODES } = require("../utils/deliveryQuote");
 
 const productRoutes = require("./productRoutes");
 const categoryRoutes = require("./categoryRoutes");
@@ -529,6 +535,185 @@ router.post("/payments/:id/collect-cod", (req, res, next) =>
 );
 
 /* ================= SETTINGS ================= */
+
+router.get("/commission-settings", async (req, res) => {
+  try {
+    const settings = await getCommissionSettings();
+    res.json({ success: true, data: readFeeSettings(settings) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load commission settings" });
+  }
+});
+
+router.put("/commission-settings", async (req, res) => {
+  try {
+    const percent = Number(req.body.defaultCommissionPercent);
+    const deliveryFee = Number(req.body.deliveryFee);
+    const freeDeliveryAbove = Number(req.body.freeDeliveryAbove);
+    const driverFeeValue = Number(req.body.driverFeeValue);
+    const driverFeeMode = req.body.driverFeeMode;
+
+    if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Commission must be a number from 0 to 100",
+      });
+    }
+    if (!Number.isFinite(deliveryFee) || deliveryFee < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Delivery fee must be 0 or more",
+      });
+    }
+    if (!Number.isFinite(freeDeliveryAbove) || freeDeliveryAbove < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Free-delivery amount must be 0 or more",
+      });
+    }
+    if (!DRIVER_FEE_MODES.includes(driverFeeMode)) {
+      return res.status(400).json({
+        success: false,
+        message: "Choose how the driver fee is calculated",
+      });
+    }
+    const driverMax = driverFeeMode === "flat" ? Number.POSITIVE_INFINITY : 100;
+    if (!Number.isFinite(driverFeeValue) || driverFeeValue < 0 || driverFeeValue > driverMax) {
+      return res.status(400).json({
+        success: false,
+        message:
+          driverFeeMode === "flat"
+            ? "Driver fee must be 0 or more"
+            : "Driver fee percent must be from 0 to 100",
+      });
+    }
+
+    const settings = await getCommissionSettings();
+    settings.defaultCommissionPercent = percent;
+    settings.deliveryFee = deliveryFee;
+    settings.freeDeliveryAbove = freeDeliveryAbove;
+    settings.driverFeeMode = driverFeeMode;
+    settings.driverFeeValue = driverFeeValue;
+    await settings.save();
+    res.json({
+      success: true,
+      message: "Payment rules updated",
+      data: readFeeSettings(settings),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to save commission" });
+  }
+});
+
+router.put("/sellers/:id/commission", async (req, res) => {
+  try {
+    const seller = await Seller.findById(req.params.id);
+    if (!seller) {
+      return res.status(404).json({ success: false, message: "Seller not found" });
+    }
+    const raw = req.body.commissionPercent;
+    if (raw === null || raw === "" || raw === undefined) {
+      seller.commissionPercent = undefined;
+      await seller.save();
+      await Seller.updateOne({ _id: seller._id }, { $unset: { commissionPercent: "" } });
+    } else {
+      const percent = Number(raw);
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        return res.status(400).json({
+          success: false,
+          message: "Commission must be a number from 0 to 100",
+        });
+      }
+      seller.commissionPercent = percent;
+      await seller.save();
+    }
+    const fresh = await Seller.findById(seller._id).select("commissionPercent").lean();
+    res.json({
+      success: true,
+      message: "Seller commission updated",
+      data: { _id: seller._id, commissionPercent: fresh?.commissionPercent ?? null },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to update seller commission" });
+  }
+});
+
+router.get("/commission-report", async (req, res) => {
+  try {
+    await settleUnsettledPaidOrders();
+    const settings = await getCommissionSettings();
+    const [sellers, ledger, deliveryOrders] = await Promise.all([
+      Seller.find().select("name phone email commissionPercent status").sort({ name: 1 }).lean(),
+      SellerLedger.find({ status: "credited" }).lean(),
+      Order.find({ "payment.status": "paid", commissionReversed: { $ne: true } })
+        .select("deliveryFee driverPayout")
+        .lean(),
+    ]);
+
+    const bySeller = new Map();
+    for (const row of ledger) {
+      const id = String(row.seller);
+      const current = bySeller.get(id) || {
+        gross: 0,
+        commission: 0,
+        sellerPayout: 0,
+        orders: 0,
+      };
+      current.gross += Number(row.gross) || 0;
+      current.commission += Number(row.commissionAmount) || 0;
+      current.sellerPayout += Number(row.sellerAmount) || 0;
+      current.orders += 1;
+      bySeller.set(id, current);
+    }
+
+    const rows = sellers.map((seller) => {
+      const totals = bySeller.get(String(seller._id)) || {
+        gross: 0,
+        commission: 0,
+        sellerPayout: 0,
+        orders: 0,
+      };
+      const usesDefault =
+        seller.commissionPercent === undefined || seller.commissionPercent === null;
+      return {
+        _id: seller._id,
+        name: seller.name,
+        phone: seller.phone || "",
+        email: seller.email || "",
+        status: seller.status,
+        commissionPercent: usesDefault ? null : seller.commissionPercent,
+        effectivePercent: usesDefault
+          ? settings.defaultCommissionPercent
+          : seller.commissionPercent,
+        ...totals,
+      };
+    });
+
+    const totals = rows.reduce(
+      (sum, row) => ({
+        gross: sum.gross + row.gross,
+        commission: sum.commission + row.commission,
+        sellerPayout: sum.sellerPayout + row.sellerPayout,
+        orders: sum.orders + row.orders,
+      }),
+      { gross: 0, commission: 0, sellerPayout: 0, orders: 0 },
+    );
+    const deliveryFee = deliveryOrders.reduce((sum, order) => sum + (Number(order.deliveryFee) || 0), 0);
+    const driverPayout = deliveryOrders.reduce((sum, order) => sum + (Number(order.driverPayout) || 0), 0);
+
+    res.json({
+      success: true,
+      data: {
+        ...readFeeSettings(settings),
+        totals: { ...totals, deliveryFee, driverPayout },
+        sellers: rows,
+      },
+    });
+  } catch (error) {
+    console.error("Commission report error:", error);
+    res.status(500).json({ success: false, message: "Failed to load commission report" });
+  }
+});
 
 router.get("/deal-settings", forward(dealSettingsRoutes, "/"));
 router.put("/deal-settings", forward(dealSettingsRoutes, "/"));

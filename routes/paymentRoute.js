@@ -6,7 +6,19 @@ const Cart = require("../models/Cart");
 const mongoose = require("mongoose");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
-const { quoteDeliveryFee } = require("../utils/deliveryQuote");
+const { quoteOrderFees } = require("../utils/deliveryQuote");
+const {
+  settleOrderCommission,
+  reverseOrderCommission,
+} = require("../utils/commission");
+
+const settlePaidOrder = async (orderId) => {
+  try {
+    await settleOrderCommission(orderId);
+  } catch (error) {
+    console.error("Seller commission settle error:", error);
+  }
+};
 
 const razorpayKeyId = process.env.RAZORPAY_KEY_ID;
 const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -252,7 +264,7 @@ router.post("/create-order", async (req, res) => {
       });
     }
 
-    const deliveryFee = quoteDeliveryFee(cart.grandTotal);
+    const { deliveryFee } = await quoteOrderFees(cart.grandTotal);
     const amount = Number(cart.grandTotal || 0) + deliveryFee;
     if (amount <= 0) {
       return res.status(400).json({
@@ -425,6 +437,7 @@ router.post("/webhook/razorpay", async (req, res) => {
         "payment.paidAt": new Date(),
         status: "confirmed",
       });
+      await settlePaidOrder(paymentDoc.order);
     } else if (event === "payment.failed") {
       paymentDoc.status = "failed";
       paymentDoc.failureReason =
@@ -630,6 +643,7 @@ router.post("/verify", async (req, res) => {
       "payment.paidAt": new Date(),
       status: "confirmed",
     });
+    await settlePaidOrder(orderId);
 
     res.json({
       success: true,
@@ -764,6 +778,9 @@ router.post("/:id/refund", async (req, res) => {
     await Order.findByIdAndUpdate(payment.order, {
       "payment.status": "refunded",
     });
+    if (!isPartial) {
+      await reverseOrderCommission(payment.order);
+    }
 
     res.json({
       success: true,
@@ -833,6 +850,7 @@ router.post("/:id/collect-cod", async (req, res) => {
       "payment.codCollected": true,
       "payment.paidAt": new Date(),
     });
+    await settlePaidOrder(payment.order);
 
     res.json({
       success: true,

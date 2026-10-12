@@ -9,10 +9,17 @@ const Product = require("../models/Product");
 const Order = require("../models/Orders");
 const Driver = require("../models/Driver");
 const Category = require("../models/Category");
+const SellerLedger = require("../models/SellerLedger");
+const {
+  settleUnsettledPaidOrders,
+  getCommissionSettings,
+  rateForSeller,
+  splitGross,
+  reverseOrderCommission,
+} = require("../utils/commission");
 const {
   generateHandoverCode,
   encryptHandoverCode,
-  sendHandoverSmsIfConfigured,
 } = require("../utils/deliveryHandover");
 
 async function findSellerAccount(query) {
@@ -220,46 +227,71 @@ router.get("/me/dashboard", async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    const [products, orders, categories] = await Promise.all([
+    await settleUnsettledPaidOrders({ "items.seller.sellerId": seller._id });
+    const settings = await getCommissionSettings();
+    const commissionPercent = rateForSeller(seller, settings.defaultCommissionPercent);
+    const [products, orders, categories, ledger] = await Promise.all([
       Product.find({ "seller.sellerId": seller._id }).select("isActive").lean(),
       Order.find({ "items.seller.sellerId": seller._id })
         .select("status items payment createdAt")
         .lean(),
       Category.countDocuments({ createdBySeller: seller._id, approvalStatus: "pending" }),
+      SellerLedger.find({ seller: seller._id, status: "credited" }).lean(),
     ]);
-    const sellerId = String(seller._id);
     const openStatuses = ["placed", "confirmed", "packed", "shipped", "out_for_delivery"];
-    let totalRevenue = 0;
-    let monthlyRevenue = 0;
     let todayOrders = 0;
     let pendingOrders = 0;
     for (const order of orders) {
       if (new Date(order.createdAt) >= today) todayOrders += 1;
       if (openStatuses.includes(order.status)) pendingOrders += 1;
-      let itemTotal = 0;
-      for (const item of order.items || []) {
-        if (String(item.seller?.sellerId) === sellerId) itemTotal += Number(item.subtotal) || 0;
-      }
-      if (order.status === "delivered" || order.payment?.status === "paid") {
-        totalRevenue += itemTotal;
-        if (new Date(order.createdAt) >= startOfMonth) monthlyRevenue += itemTotal;
+    }
+    let grossSales = 0;
+    let commissionAmount = 0;
+    let sellerEarnings = 0;
+    let monthlyEarnings = 0;
+    for (const row of ledger) {
+      grossSales += Number(row.gross) || 0;
+      commissionAmount += Number(row.commissionAmount) || 0;
+      sellerEarnings += Number(row.sellerAmount) || 0;
+      if (new Date(row.paidAt || row.createdAt) >= startOfMonth) {
+        monthlyEarnings += Number(row.sellerAmount) || 0;
       }
     }
     res.json({
       success: true,
       data: {
         totalOrders: orders.length,
-        totalRevenue,
+        totalRevenue: sellerEarnings,
+        grossSales,
+        commissionAmount,
+        sellerEarnings,
+        commissionPercent,
         totalProducts: products.filter((item) => item.isActive).length,
         totalCategories: categories,
         todayOrders,
         pendingOrders,
         pendingPayments: 0,
-        monthlyRevenue,
+        monthlyRevenue: monthlyEarnings,
+        monthlyEarnings,
       },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: "Failed to load dashboard" });
+  }
+});
+
+router.get("/me/earnings", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.query);
+    if (!seller) return res.json({ success: true, data: [] });
+    await settleUnsettledPaidOrders({ "items.seller.sellerId": seller._id });
+    const rows = await SellerLedger.find({ seller: seller._id })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load earnings" });
   }
 });
 
@@ -271,13 +303,40 @@ router.get("/me/orders", async (req, res) => {
     }
     const filter = { "items.seller.sellerId": seller._id };
     if (req.query.status) filter.status = req.query.status;
+    await settleUnsettledPaidOrders({ "items.seller.sellerId": seller._id });
+    const settings = await getCommissionSettings();
+    const commissionPercent = rateForSeller(seller, settings.defaultCommissionPercent);
     const orders = await Order.find(filter)
       .populate("user", "name phone")
       .populate("assignedDriver", "name phone")
       .sort({ createdAt: -1 })
       .limit(100)
       .lean();
-    res.json({ success: true, data: orders });
+    const sellerId = String(seller._id);
+    const data = orders.map((order) => {
+      const settlement = (order.settlements || []).find(
+        (row) => String(row.sellerId) === sellerId,
+      );
+      const ownItems = (order.items || []).filter(
+        (item) => String(item.seller?.sellerId) === sellerId,
+      );
+      const gross = ownItems.reduce((sum, item) => sum + (Number(item.subtotal) || 0), 0);
+      const split =
+        settlement && order.commissionSettled && !order.commissionReversed
+          ? settlement
+          : splitGross(gross, commissionPercent);
+      return {
+        ...order,
+        sellerShare: {
+          gross: split.gross,
+          commissionPercent: split.commissionPercent,
+          commissionAmount: split.commissionAmount,
+          sellerAmount: split.sellerAmount,
+          credited: Boolean(order.commissionSettled && !order.commissionReversed && order.payment?.status === "paid"),
+        },
+      };
+    });
+    res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: "Failed to load orders" });
   }
@@ -360,11 +419,8 @@ router.put("/me/orders/:id/status", async (req, res) => {
     }
 
     const updated = await Order.findByIdAndUpdate(req.params.id, updateData, { new: true });
-    if (handoverPlain) {
-      const phone = order.address?.snapshot?.phone;
-      if (phone) {
-        sendHandoverSmsIfConfigured(phone, handoverPlain, order.orderNumber).catch(() => {});
-      }
+    if (status === "cancelled" && order.payment?.status === "paid") {
+      await reverseOrderCommission(order._id);
     }
     res.json({ success: true, message: `Order marked ${status.replace(/_/g, " ")}`, data: updated });
   } catch (error) {

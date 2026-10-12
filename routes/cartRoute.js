@@ -81,7 +81,7 @@ const createCartItem = (product, variant, quantity) => {
     product: product._id,
     variantId: variant._id,
     productName: product.name,
-    image: product.image,
+    image: variant.image || product.image,
     packSize: variant.packSize,
     packUnit: variant.packUnit,
     unitPrice: variant.price,

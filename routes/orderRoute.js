@@ -9,7 +9,7 @@ const User = require("../models/User");
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 const {
-  quoteDeliveryFee,
+  quoteOrderFees,
   quoteDeliverySlot,
   normalizeAddressSnapshot,
 } = require("../utils/deliveryQuote");
@@ -20,10 +20,21 @@ const {
   normalizeCodeInput,
   codesEqualTimingSafe,
   MAX_WRONG_ATTEMPTS,
-  sendHandoverSmsIfConfigured,
 } = require("../utils/deliveryHandover");
 const { buildOrderInvoicePdf } = require("../utils/orderInvoicePdf");
 const adminOrDriverMiddleware = require("../middleware/adminOrDriverMiddleware");
+const {
+  settleOrderCommission,
+  reverseOrderCommission,
+} = require("../utils/commission");
+
+const settlePaidOrder = async (orderId) => {
+  try {
+    await settleOrderCommission(orderId);
+  } catch (error) {
+    console.error("Seller commission settle error:", error);
+  }
+};
 
 /* ================= HELPER FUNCTIONS ================= */
 
@@ -245,8 +256,9 @@ router.post("/", async (req, res) => {
     // Generate order number
     const orderNumber = await generateOrderNumber();
 
-    // Delivery fee is quoted from the cart, not trusted from the client.
-    const quotedDeliveryFee = quoteDeliveryFee(cart.grandTotal);
+    // Delivery fee and driver pay are quoted from saved rules, not from the client.
+    const quoted = await quoteOrderFees(cart.grandTotal);
+    const quotedDeliveryFee = quoted.deliveryFee;
     const grandTotal = cart.grandTotal + quotedDeliveryFee;
     const quotedSlot =
       deliverySlot?.date && deliverySlot?.slot
@@ -263,6 +275,9 @@ router.post("/", async (req, res) => {
       totalDiscount: cart.totalDiscount,
       taxAmount: cart.taxAmount,
       deliveryFee: quotedDeliveryFee,
+      driverPayout: quoted.driverPayout,
+      driverFeeMode: quoted.settings.driverFeeMode,
+      driverFeeValue: quoted.settings.driverFeeValue,
       grandTotal,
       payment: {
         method: paymentMethod,
@@ -329,6 +344,10 @@ router.post("/", async (req, res) => {
     await cart.save({ session });
 
     await session.commitTransaction();
+
+    if (order.payment.status === "paid") {
+      await settlePaidOrder(order._id);
+    }
 
     // Populate order details
     await order.populate("items.product", "name image");
@@ -742,6 +761,7 @@ router.put("/:id/status", async (req, res) => {
             collectedAt: new Date(),
           },
         );
+        await settlePaidOrder(order._id);
       }
     }
 
@@ -754,17 +774,6 @@ router.put("/:id/status", async (req, res) => {
       new: true,
       runValidators: true,
     }).populate("items.product", "name image");
-
-    if (handoverPlain) {
-      const phone =
-        order.address?.snapshot?.phone ||
-        updatedOrder?.address?.snapshot?.phone;
-      if (phone) {
-        sendHandoverSmsIfConfigured(phone, handoverPlain, order.orderNumber).catch(
-          (err) => console.error("Handover SMS error:", err.message),
-        );
-      }
-    }
 
     res.json({
       success: true,
@@ -909,6 +918,7 @@ router.post(
             collectedAt: new Date(),
           },
         );
+        await settlePaidOrder(order._id);
       }
 
       return res.json({
@@ -989,6 +999,8 @@ router.post("/:id/cancel", async (req, res) => {
       });
     }
 
+    const wasPaid = order.payment.status === "paid";
+
     if (order.payment.method === "balance" && order.payment.status === "paid") {
       await creditWallet({
         userId: order.user,
@@ -1025,6 +1037,10 @@ router.post("/:id/cancel", async (req, res) => {
     await restoreStock(order.items);
 
     await session.commitTransaction();
+
+    if (wasPaid) {
+      await reverseOrderCommission(order._id);
+    }
 
     res.json({
       success: true,
@@ -1091,6 +1107,7 @@ router.post("/:id/verify-payment", async (req, res) => {
     }
 
     await order.save();
+    await settlePaidOrder(order._id);
 
     // Update payment record
     await Payment.findOneAndUpdate(

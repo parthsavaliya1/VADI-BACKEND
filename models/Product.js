@@ -160,6 +160,12 @@ const ProductSchema = new mongoose.Schema(
           type: Boolean,
           default: true,
         },
+
+        /** Photo for this pack size. Shown on the product page when this size is selected. */
+        image: {
+          type: String,
+          default: "",
+        },
       },
     ],
 

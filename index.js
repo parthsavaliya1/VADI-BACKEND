@@ -26,8 +26,11 @@ const appConfigRoutes = require("./routes/appConfigRoutes");
 const driverAuthRoutes = require("./routes/driverAuthRoutes");
 const adminPanelRoutes = require("./routes/adminPanelRoutes");
 const walletRoutes = require("./routes/walletRoutes");
+const uploadRoutes = require("./routes/uploadRoutes");
+const feeRoutes = require("./routes/feeRoutes");
 
 const app = express();
+app.set("trust proxy", 1);
 
 app.use(
   cors({
@@ -45,6 +48,7 @@ app.use(appConfigRoutes);
 // 🔥 serve uploads FIRST
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
+app.use("/api/uploads", uploadRoutes);
 app.use("/products", productRoutes);
 app.use("/categories", categoryRoutes);
 app.use("/banners", bannerRoutes);
@@ -55,6 +59,7 @@ app.use("/orders", orderRoute);
 app.use("/payments", paymentRoute);
 app.use("/wallet", walletRoutes);
 app.use("/cart", cartRoute);
+app.use("/fees", feeRoutes);
 app.use("/reviews", reviewRoute);
 app.use("/sellers", sellerRoutes);
 app.use("/api/admin", adminAuthRoutes);

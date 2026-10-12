@@ -62,6 +62,22 @@ const OrderItemSchema = new mongoose.Schema(
       min: 0,
     },
 
+    commissionPercent: {
+      type: Number,
+      min: 0,
+      max: 100,
+    },
+
+    commissionAmount: {
+      type: Number,
+      min: 0,
+    },
+
+    sellerAmount: {
+      type: Number,
+      min: 0,
+    },
+
     /* ===== SELLER SNAPSHOT ===== */
 
     seller: {
@@ -132,6 +148,24 @@ const OrderSchema = new mongoose.Schema(
     },
 
     deliveryFee: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    /** Driver earning locked in when the order is placed, from the fee rules at that time. */
+    driverPayout: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    driverFeeMode: {
+      type: String,
+      default: "",
+    },
+
+    driverFeeValue: {
       type: Number,
       default: 0,
       min: 0,
@@ -274,6 +308,47 @@ const OrderSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+
+    /* ================= SELLER COMMISSION ================= */
+
+    commissionSettled: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    commissionSettledAt: Date,
+
+    commissionReversed: {
+      type: Boolean,
+      default: false,
+    },
+
+    platformCommission: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    sellerPayoutTotal: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    settlements: [
+      {
+        sellerId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Seller",
+        },
+        sellerName: String,
+        gross: Number,
+        commissionPercent: Number,
+        commissionAmount: Number,
+        sellerAmount: Number,
+      },
+    ],
 
     /* ================= META ================= */
 
