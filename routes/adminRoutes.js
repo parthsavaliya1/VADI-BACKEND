@@ -175,6 +175,71 @@ router.get("/stats", async (req, res) => {
     ]);
     const monthlyRevenue = monthlyRevenueData[0]?.total || 0;
 
+    const chartStart = new Date(today.getFullYear(), today.getMonth() - 5, 1);
+    const months = Array.from({ length: 6 }, (_, index) => {
+      const date = new Date(today.getFullYear(), today.getMonth() - (5 - index), 1);
+      return {
+        key: `${date.getFullYear()}-${date.getMonth() + 1}`,
+        label: date.toLocaleString("en-IN", { month: "short" }),
+      };
+    });
+
+    const countByMonth = async (Model) => {
+      const rows = await Model.aggregate([
+        { $match: { createdAt: { $gte: chartStart } } },
+        {
+          $group: {
+            _id: { y: { $year: "$createdAt" }, m: { $month: "$createdAt" } },
+            count: { $sum: 1 },
+          },
+        },
+      ]);
+      const counts = new Map(rows.map((row) => [`${row._id.y}-${row._id.m}`, row.count]));
+      return months.map((month) => counts.get(month.key) || 0);
+    };
+
+    const countByField = async (Model, field) => {
+      const rows = await Model.aggregate([
+        { $group: { _id: `$${field}`, count: { $sum: 1 } } },
+        { $match: { count: { $gt: 0 }, _id: { $ne: null } } },
+        { $sort: { count: -1 } },
+      ]);
+      return rows.map((row) => ({
+        label: String(row._id).replace(/_/g, " "),
+        count: row.count,
+      }));
+    };
+
+    const [userMonths, orderMonths, productMonths, paymentMonths, usersByRole, ordersByStatus, paymentsByStatus, productRows] =
+      await Promise.all([
+        countByMonth(User),
+        countByMonth(Order),
+        countByMonth(Product),
+        countByMonth(Payment),
+        countByField(User, "role"),
+        countByField(Order, "status"),
+        countByField(Payment, "status"),
+        Product.aggregate([
+          {
+            $group: {
+              _id: {
+                $switch: {
+                  branches: [
+                    { case: { $eq: ["$approvalStatus", "pending"] }, then: "Pending" },
+                    { case: { $eq: ["$approvalStatus", "rejected"] }, then: "Rejected" },
+                    { case: { $eq: ["$isActive", false] }, then: "Inactive" },
+                  ],
+                  default: "Active",
+                },
+              },
+              count: { $sum: 1 },
+            },
+          },
+          { $match: { count: { $gt: 0 } } },
+          { $sort: { count: -1 } },
+        ]),
+      ]);
+
     res.json({
       success: true,
       data: {
@@ -187,6 +252,22 @@ router.get("/stats", async (req, res) => {
         pendingOrders,
         pendingPayments,
         monthlyRevenue,
+        charts: {
+          monthly: months.map((month, index) => ({
+            label: month.label,
+            users: userMonths[index],
+            orders: orderMonths[index],
+            products: productMonths[index],
+            payments: paymentMonths[index],
+          })),
+          usersByRole,
+          ordersByStatus,
+          paymentsByStatus,
+          productsByStatus: productRows.map((row) => ({
+            label: row._id,
+            count: row.count,
+          })),
+        },
       },
     });
   } catch (error) {

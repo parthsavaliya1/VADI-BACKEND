@@ -307,6 +307,7 @@ router.post("/mine", async (req, res) => {
   try {
     const {
       userId,
+      sellerId,
       name,
       description,
       category,
@@ -319,9 +320,6 @@ router.post("/mine", async (req, res) => {
       image,
     } = req.body;
 
-    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ success: false, message: "Valid user is required" });
-    }
     if (!name || !category || !unit) {
       return res.status(400).json({
         success: false,
@@ -329,7 +327,12 @@ router.post("/mine", async (req, res) => {
       });
     }
 
-    const sellerDoc = await Seller.findOne({ user: userId, status: "approved", isActive: true });
+    let sellerDoc = null;
+    if (sellerId && mongoose.Types.ObjectId.isValid(sellerId)) {
+      sellerDoc = await Seller.findOne({ _id: sellerId, status: "approved", isActive: true });
+    } else if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+      sellerDoc = await Seller.findOne({ user: userId, status: "approved", isActive: true });
+    }
     if (!sellerDoc) {
       return res.status(403).json({
         success: false,
@@ -379,8 +382,8 @@ router.post("/mine", async (req, res) => {
         },
       ],
       image: image || "",
-      approvalStatus: "pending",
-      isActive: false,
+      approvalStatus: "approved",
+      isActive: true,
       featured: false,
       trending: false,
       bestDeal: false,

@@ -40,6 +40,13 @@ router.get("/", async (req, res) => {
     const filter = {};
     if (isActive !== undefined) filter.isActive = isActive === "true";
     if (showOnHome !== undefined) filter.showOnHome = showOnHome === "true";
+    if (req.query.includePending !== "true") {
+      filter.$or = [
+        { approvalStatus: "approved" },
+        { approvalStatus: { $exists: false } },
+        { approvalStatus: null },
+      ];
+    }
 
     // Sorting
     const sort = { [sortBy]: sortOrder === "asc" ? 1 : -1 };

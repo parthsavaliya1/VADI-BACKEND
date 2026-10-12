@@ -6,6 +6,26 @@ const router = express.Router();
 const Seller = require("../models/Seller");
 const User = require("../models/User");
 const Product = require("../models/Product");
+const Order = require("../models/Orders");
+const Driver = require("../models/Driver");
+const Category = require("../models/Category");
+const {
+  generateHandoverCode,
+  encryptHandoverCode,
+  sendHandoverSmsIfConfigured,
+} = require("../utils/deliveryHandover");
+
+async function findSellerAccount(query) {
+  const sellerId = query.sellerId || query.id;
+  const userId = query.userId;
+  if (sellerId && mongoose.Types.ObjectId.isValid(sellerId)) {
+    return Seller.findOne({ _id: sellerId });
+  }
+  if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+    return Seller.findOne({ user: userId });
+  }
+  return null;
+}
 
 function phoneVariants(phone) {
   const digits = String(phone || "").replace(/\D/g, "");
@@ -79,16 +99,16 @@ router.post("/register", async (req, res) => {
 
 router.get("/me", async (req, res) => {
   try {
-    const { userId } = req.query;
-    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ success: false, message: "Valid userId is required" });
+    const seller = await findSellerAccount(req.query);
+    if (!seller) {
+      return res.status(400).json({ success: false, message: "Seller account is required" });
     }
-    const seller = await Seller.findOne({ user: userId }).select("+passwordHash").lean();
-    if (seller) {
-      seller.hasPassword = Boolean(seller.passwordHash);
-      delete seller.passwordHash;
+    const fresh = await Seller.findById(seller._id).select("+passwordHash").lean();
+    if (fresh) {
+      fresh.hasPassword = Boolean(fresh.passwordHash);
+      delete fresh.passwordHash;
     }
-    res.json({ success: true, data: seller });
+    res.json({ success: true, data: fresh });
   } catch (error) {
     res.status(500).json({ success: false, message: "Failed to fetch seller" });
   }
@@ -96,11 +116,7 @@ router.get("/me", async (req, res) => {
 
 router.get("/me/products", async (req, res) => {
   try {
-    const { userId } = req.query;
-    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ success: false, message: "Valid userId is required" });
-    }
-    const seller = await Seller.findOne({ user: userId }).lean();
+    const seller = await findSellerAccount(req.query);
     if (!seller) {
       return res.json({ success: true, data: [] });
     }
@@ -111,6 +127,248 @@ router.get("/me/products", async (req, res) => {
     res.json({ success: true, data: products });
   } catch (error) {
     res.status(500).json({ success: false, message: "Failed to fetch seller products" });
+  }
+});
+
+router.put("/me/products/:id", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.body);
+    if (!seller || seller.status !== "approved") {
+      return res.status(403).json({ success: false, message: "Approved seller only" });
+    }
+    const product = await Product.findOne({
+      _id: req.params.id,
+      "seller.sellerId": seller._id,
+    });
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+    if (typeof req.body.isActive === "boolean") product.isActive = req.body.isActive;
+    if (req.body.stock !== undefined && product.variants?.[0]) {
+      product.variants[0].stock = Number(req.body.stock);
+    }
+    await product.save();
+    res.json({ success: true, data: product, message: "Product updated" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to update product" });
+  }
+});
+
+router.get("/me/categories", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.query);
+    if (!seller) return res.json({ success: true, data: [] });
+    const categories = await Category.find({ createdBySeller: seller._id }).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, data: categories });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load categories" });
+  }
+});
+
+router.post("/me/categories", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.body);
+    if (!seller || seller.status !== "approved") {
+      return res.status(403).json({ success: false, message: "Approved seller only" });
+    }
+    const name = String(req.body.name || "").trim();
+    if (!name) return res.status(400).json({ success: false, message: "Category name is required" });
+    let slug = name.toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/[\s_-]+/g, "-").replace(/^-+|-+$/g, "");
+    if (await Category.findOne({ slug })) slug = `${slug}-${Date.now()}`;
+    const category = await Category.create({
+      name,
+      slug,
+      image: req.body.image || "",
+      sortOrder: 0,
+      showOnHome: false,
+      isActive: false,
+      approvalStatus: "pending",
+      createdBySeller: seller._id,
+    });
+    res.status(201).json({
+      success: true,
+      message: "Category sent to admin for approval",
+      data: category,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ success: false, message: "This category name already exists" });
+    }
+    res.status(500).json({ success: false, message: "Failed to add category" });
+  }
+});
+
+router.get("/me/staff", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.query);
+    if (!seller || seller.status !== "approved") {
+      return res.status(403).json({ success: false, message: "Approved seller only" });
+    }
+    const staff = await Driver.find({ isActive: true }).select("name phone").sort({ name: 1 }).lean();
+    res.json({ success: true, data: staff });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load staff" });
+  }
+});
+
+router.get("/me/dashboard", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.query);
+    if (!seller) {
+      return res.status(404).json({ success: false, message: "Seller not found" });
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const [products, orders, categories] = await Promise.all([
+      Product.find({ "seller.sellerId": seller._id }).select("isActive").lean(),
+      Order.find({ "items.seller.sellerId": seller._id })
+        .select("status items payment createdAt")
+        .lean(),
+      Category.countDocuments({ createdBySeller: seller._id, approvalStatus: "pending" }),
+    ]);
+    const sellerId = String(seller._id);
+    const openStatuses = ["placed", "confirmed", "packed", "shipped", "out_for_delivery"];
+    let totalRevenue = 0;
+    let monthlyRevenue = 0;
+    let todayOrders = 0;
+    let pendingOrders = 0;
+    for (const order of orders) {
+      if (new Date(order.createdAt) >= today) todayOrders += 1;
+      if (openStatuses.includes(order.status)) pendingOrders += 1;
+      let itemTotal = 0;
+      for (const item of order.items || []) {
+        if (String(item.seller?.sellerId) === sellerId) itemTotal += Number(item.subtotal) || 0;
+      }
+      if (order.status === "delivered" || order.payment?.status === "paid") {
+        totalRevenue += itemTotal;
+        if (new Date(order.createdAt) >= startOfMonth) monthlyRevenue += itemTotal;
+      }
+    }
+    res.json({
+      success: true,
+      data: {
+        totalOrders: orders.length,
+        totalRevenue,
+        totalProducts: products.filter((item) => item.isActive).length,
+        totalCategories: categories,
+        todayOrders,
+        pendingOrders,
+        pendingPayments: 0,
+        monthlyRevenue,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load dashboard" });
+  }
+});
+
+router.get("/me/orders", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.query);
+    if (!seller) {
+      return res.json({ success: true, data: [] });
+    }
+    const filter = { "items.seller.sellerId": seller._id };
+    if (req.query.status) filter.status = req.query.status;
+    const orders = await Order.find(filter)
+      .populate("user", "name phone")
+      .populate("assignedDriver", "name phone")
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load orders" });
+  }
+});
+
+router.put("/me/orders/:id/assign", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.body);
+    if (!seller || seller.status !== "approved") {
+      return res.status(403).json({ success: false, message: "Approved seller only" });
+    }
+    const { driverId } = req.body;
+    if (!driverId || !mongoose.Types.ObjectId.isValid(driverId)) {
+      return res.status(400).json({ success: false, message: "Choose a staff member" });
+    }
+    const driver = await Driver.findOne({ _id: driverId, isActive: true });
+    if (!driver) {
+      return res.status(404).json({ success: false, message: "Staff member is not active" });
+    }
+    const order = await Order.findOne({
+      _id: req.params.id,
+      "items.seller.sellerId": seller._id,
+    });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+    if (["delivered", "cancelled", "returned"].includes(order.status)) {
+      return res.status(400).json({ success: false, message: "This order is already closed" });
+    }
+    order.assignedDriver = driver._id;
+    await order.save();
+    res.json({ success: true, message: `Assigned to ${driver.name || "staff"}` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to assign staff" });
+  }
+});
+
+router.put("/me/orders/:id/status", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.body);
+    if (!seller || seller.status !== "approved") {
+      return res.status(403).json({ success: false, message: "Approved seller only" });
+    }
+    const { status } = req.body;
+    const validStatuses = ["confirmed", "packed", "shipped", "out_for_delivery", "cancelled"];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid status" });
+    }
+    const order = await Order.findOne({
+      _id: req.params.id,
+      "items.seller.sellerId": seller._id,
+    }).select("+deliveryHandoverCipher");
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+    if (["delivered", "cancelled", "returned"].includes(order.status)) {
+      return res.status(400).json({ success: false, message: `Cannot change a ${order.status} order` });
+    }
+    if (status === "out_for_delivery" && !order.assignedDriver) {
+      return res.status(400).json({
+        success: false,
+        message: "Assign a staff member before sending this order out for delivery",
+      });
+    }
+
+    const prevStatus = order.status;
+    const updateData = { status };
+    let handoverPlain = null;
+    if (status === "out_for_delivery" && prevStatus !== "out_for_delivery") {
+      handoverPlain = generateHandoverCode();
+      updateData.deliveryHandoverCipher = encryptHandoverCode(handoverPlain);
+      updateData.deliveryHandoverGeneratedAt = new Date();
+      updateData.deliveryHandoverWrongAttempts = 0;
+      updateData.deliveryHandoverVerifiedAt = null;
+      updateData.deliveryHandoverVerifiedByDriver = null;
+    }
+    if (status === "cancelled") {
+      updateData.cancelledAt = new Date();
+      updateData.cancelReason = "Cancelled by seller";
+    }
+
+    const updated = await Order.findByIdAndUpdate(req.params.id, updateData, { new: true });
+    if (handoverPlain) {
+      const phone = order.address?.snapshot?.phone;
+      if (phone) {
+        sendHandoverSmsIfConfigured(phone, handoverPlain, order.orderNumber).catch(() => {});
+      }
+    }
+    res.json({ success: true, message: `Order marked ${status.replace(/_/g, " ")}`, data: updated });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to update order" });
   }
 });
 
@@ -177,13 +435,13 @@ router.post("/login", async (req, res) => {
 
 router.put("/me", async (req, res) => {
   try {
-    const { userId, name, email, city, area, phone } = req.body;
-    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ success: false, message: "Valid user is required" });
-    }
-    const seller = await Seller.findOne({ user: userId, status: "approved" });
-    if (!seller) {
+    const { name, email, city, area, phone } = req.body;
+    const seller = await findSellerAccount(req.body);
+    if (seller && seller.status !== "approved") {
       return res.status(403).json({ success: false, message: "Approved seller only" });
+    }
+    if (!seller) {
+      return res.status(400).json({ success: false, message: "Seller account is required" });
     }
     if (name) seller.name = String(name).trim();
     if (email !== undefined) seller.email = email;

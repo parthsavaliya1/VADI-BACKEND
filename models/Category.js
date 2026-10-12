@@ -34,6 +34,19 @@ const CategorySchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    approvalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "approved",
+      index: true,
+    },
+
+    createdBySeller: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Seller",
+      index: true,
+    },
   },
   { timestamps: true },
 );

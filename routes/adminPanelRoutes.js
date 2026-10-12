@@ -255,6 +255,22 @@ router.get("/categories/:id", async (req, res) => {
 });
 
 router.post("/categories", forward(categoryRoutes, "/"));
+router.put("/categories/:id/approval", async (req, res) => {
+  try {
+    const { approvalStatus } = req.body;
+    if (!["pending", "approved", "rejected"].includes(approvalStatus)) {
+      return res.status(400).json({ success: false, message: "Invalid approval status" });
+    }
+    const category = await Category.findById(req.params.id);
+    if (!category) return res.status(404).json({ success: false, message: "Category not found" });
+    category.approvalStatus = approvalStatus;
+    category.isActive = approvalStatus === "approved";
+    await category.save();
+    res.json({ success: true, message: "Category updated", data: category });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to update category" });
+  }
+});
 router.put("/categories/:id", (req, res, next) =>
   forward(categoryRoutes, `/${req.params.id}`)(req, res, next),
 );
@@ -283,6 +299,12 @@ router.put("/sellers/:id/status", async (req, res) => {
     seller.status = status;
     seller.isActive = status === "approved";
     await seller.save();
+    if (status === "approved") {
+      await Product.updateMany(
+        { "seller.sellerId": seller._id, approvalStatus: "pending" },
+        { $set: { approvalStatus: "approved", isActive: true } },
+      );
+    }
     if (seller.user) {
       await User.findByIdAndUpdate(seller.user, {
         role: status === "approved" ? "seller" : "user",

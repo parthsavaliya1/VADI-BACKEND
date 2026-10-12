@@ -267,6 +267,14 @@ const OrderSchema = new mongoose.Schema(
       index: true,
     },
 
+    /** Staff member the seller assigned to deliver this order */
+    assignedDriver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Driver",
+      default: null,
+      index: true,
+    },
+
     /* ================= META ================= */
 
     orderNumber: {
