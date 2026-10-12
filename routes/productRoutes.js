@@ -61,7 +61,12 @@ router.get("/", async (req, res) => {
     } = req.query;
 
     // Build filter object
-    const filter = { isActive };
+    const filter = {};
+    if (isActive !== undefined && isActive !== "all") {
+      filter.isActive = isActive === true || isActive === "true";
+    } else if (isActive !== "all") {
+      filter.isActive = true;
+    }
 
     if (category) filter.category = category;
     if (seller && mongoose.Types.ObjectId.isValid(seller)) {
@@ -88,6 +93,22 @@ router.get("/", async (req, res) => {
       if (minPrice) priceFilter.$gte = Number(minPrice);
       if (maxPrice) priceFilter.$lte = Number(maxPrice);
       filter["variants.price"] = priceFilter;
+    }
+
+    if (req.query.includePending !== "true") {
+      const visible = {
+        $or: [
+          { approvalStatus: "approved" },
+          { approvalStatus: { $exists: false } },
+          { approvalStatus: null },
+        ],
+      };
+      if (filter.$or) {
+        filter.$and = [{ $or: filter.$or }, visible];
+        delete filter.$or;
+      } else {
+        filter.$and = [visible];
+      }
     }
 
     // Sorting
@@ -275,6 +296,109 @@ router.get("/:id", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch product",
+      error: error.message,
+    });
+  }
+});
+
+/* ================= SELLER CREATE PRODUCT ================= */
+
+router.post("/mine", async (req, res) => {
+  try {
+    const {
+      userId,
+      name,
+      description,
+      category,
+      unit,
+      packSize,
+      packUnit,
+      price,
+      mrp,
+      stock,
+      image,
+    } = req.body;
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Valid user is required" });
+    }
+    if (!name || !category || !unit) {
+      return res.status(400).json({
+        success: false,
+        message: "Name, category, and unit are required",
+      });
+    }
+
+    const sellerDoc = await Seller.findOne({ user: userId, status: "approved", isActive: true });
+    if (!sellerDoc) {
+      return res.status(403).json({
+        success: false,
+        message: "Only an approved seller can add a product",
+      });
+    }
+
+    const allowedUnits = ["kg", "g", "litre", "ml", "pcs"];
+    const variantUnit = allowedUnits.includes(packUnit) ? packUnit : "pcs";
+    const salePrice = Number(price);
+    const listPrice = Number(mrp || price);
+    const qty = Number(stock);
+    if (!salePrice || salePrice <= 0 || !listPrice || listPrice < salePrice || qty < 0 || Number.isNaN(qty)) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a valid price, MRP, and stock",
+      });
+    }
+
+    let slug = generateSlug(name);
+    if (await Product.findOne({ slug })) slug = `${slug}-${Date.now()}`;
+
+    const product = new Product({
+      name: String(name).trim(),
+      slug,
+      description,
+      category,
+      unit,
+      seller: {
+        sellerId: sellerDoc._id,
+        sellerName: sellerDoc.name,
+        contact: { phone: sellerDoc.phone || "", email: sellerDoc.email || "" },
+        location: {
+          city: sellerDoc.location?.city || "",
+          area: sellerDoc.location?.area || "",
+        },
+      },
+      variants: [
+        {
+          packSize: Number(packSize) > 0 ? Number(packSize) : 1,
+          packUnit: variantUnit,
+          mrp: listPrice,
+          price: salePrice,
+          stock: qty,
+          isDefault: true,
+          isActive: true,
+        },
+      ],
+      image: image || "",
+      approvalStatus: "pending",
+      isActive: false,
+      featured: false,
+      trending: false,
+      bestDeal: false,
+    });
+
+    await product.save();
+    await product.populate("category", "name slug");
+
+    res.status(201).json({
+      success: true,
+      message: "Product submitted. It will go live after admin approval.",
+      data: product,
+    });
+  } catch (error) {
+    console.error("Seller create product error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create product",
       error: error.message,
     });
   }

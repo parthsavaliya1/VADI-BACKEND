@@ -148,7 +148,7 @@ const OrderSchema = new mongoose.Schema(
     payment: {
       method: {
         type: String,
-        enum: ["cod", "upi", "card", "wallet"],
+        enum: ["cod", "upi", "card", "wallet", "balance"],
         required: true,
       },
 
@@ -187,6 +187,8 @@ const OrderSchema = new mongoose.Schema(
         name: String,
         phone: String,
         addressLine: String,
+        addressLine1: String,
+        addressLine2: String,
         city: String,
         state: String,
         pincode: String,

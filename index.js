@@ -24,6 +24,8 @@ const homeSectionSettingsRoutes = require("./routes/homeSectionSettingsRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const appConfigRoutes = require("./routes/appConfigRoutes");
 const driverAuthRoutes = require("./routes/driverAuthRoutes");
+const adminPanelRoutes = require("./routes/adminPanelRoutes");
+const walletRoutes = require("./routes/walletRoutes");
 
 const app = express();
 
@@ -51,11 +53,13 @@ app.use("/api/users", userRoutes);
 app.use("/addresses", addressRoute);
 app.use("/orders", orderRoute);
 app.use("/payments", paymentRoute);
+app.use("/wallet", walletRoutes);
 app.use("/cart", cartRoute);
 app.use("/reviews", reviewRoute);
 app.use("/sellers", sellerRoutes);
 app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/admin", adminPanelRoutes);
 app.use("/deal-settings", dealSettingsRoutes);
 app.use("/home-section-settings", homeSectionSettingsRoutes);
 app.use("/notifications", notificationRoutes);

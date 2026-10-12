@@ -6,6 +6,7 @@ const Cart = require("../models/Cart");
 const mongoose = require("mongoose");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
+const { quoteDeliveryFee } = require("../utils/deliveryQuote");
 
 const razorpayKeyId = process.env.RAZORPAY_KEY_ID;
 const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -219,7 +220,7 @@ router.get("/", async (req, res) => {
  */
 router.post("/create-order", async (req, res) => {
   try {
-    const { userId, deliveryFee = 0, paymentMethod = "upi" } = req.body;
+    const { userId, paymentMethod = "upi" } = req.body;
 
     if (!razorpay) {
       return res.status(500).json({
@@ -251,7 +252,8 @@ router.post("/create-order", async (req, res) => {
       });
     }
 
-    const amount = Number(cart.grandTotal || 0) + Number(deliveryFee || 0);
+    const deliveryFee = quoteDeliveryFee(cart.grandTotal);
+    const amount = Number(cart.grandTotal || 0) + deliveryFee;
     if (amount <= 0) {
       return res.status(400).json({
         success: false,

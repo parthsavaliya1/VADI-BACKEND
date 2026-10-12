@@ -34,10 +34,27 @@ const SellerSchema = new mongoose.Schema(
         trim: true,
       },
     },
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      unique: true,
+      sparse: true,
+      index: true,
+    },
+    status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "approved",
+      index: true,
+    },
     isActive: {
       type: Boolean,
       default: true,
       index: true,
+    },
+    passwordHash: {
+      type: String,
+      select: false,
     },
   },
   { timestamps: true },

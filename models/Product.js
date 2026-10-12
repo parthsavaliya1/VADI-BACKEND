@@ -211,6 +211,13 @@ const ProductSchema = new mongoose.Schema(
       default: 0,
     },
 
+    approvalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "approved",
+      index: true,
+    },
+
     isActive: {
       type: Boolean,
       default: true,

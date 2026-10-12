@@ -1,12 +1,18 @@
 const express = require("express");
 const router = express.Router();
 const Order = require("../models/Orders"); // Adjust path as needed
-const Payment = require("../models/Payment"); // Adjust path as needed
+const Payment = require("../models/Payment");
+const { debitWallet, creditWallet } = require("../utils/wallet"); // Adjust path as needed
 const Cart = require("../models/Cart"); // Adjust path as needed
 const Product = require("../models/Product"); // Adjust path as needed
 const User = require("../models/User");
 const mongoose = require("mongoose");
 const crypto = require("crypto");
+const {
+  quoteDeliveryFee,
+  quoteDeliverySlot,
+  normalizeAddressSnapshot,
+} = require("../utils/deliveryQuote");
 const {
   generateHandoverCode,
   encryptHandoverCode,
@@ -14,6 +20,7 @@ const {
   normalizeCodeInput,
   codesEqualTimingSafe,
   MAX_WRONG_ATTEMPTS,
+  sendHandoverSmsIfConfigured,
 } = require("../utils/deliveryHandover");
 const { buildOrderInvoicePdf } = require("../utils/orderInvoicePdf");
 const adminOrDriverMiddleware = require("../middleware/adminOrDriverMiddleware");
@@ -147,7 +154,6 @@ router.post("/", async (req, res) => {
       paymentMethod,
       paymentDetails,
       deliverySlot,
-      deliveryFee = 0,
       notes,
     } = req.body;
 
@@ -160,7 +166,7 @@ router.post("/", async (req, res) => {
       });
     }
 
-    if (!["cod", "upi", "card", "wallet"].includes(paymentMethod)) {
+    if (!["cod", "upi", "card", "wallet", "balance"].includes(paymentMethod)) {
       await session.abortTransaction();
       return res.status(400).json({
         success: false,
@@ -168,7 +174,7 @@ router.post("/", async (req, res) => {
       });
     }
 
-    if (paymentMethod !== "cod") {
+    if (paymentMethod !== "cod" && paymentMethod !== "balance") {
       if (
         !paymentDetails?.razorpayPaymentId ||
         !paymentDetails?.razorpayOrderId ||
@@ -239,8 +245,13 @@ router.post("/", async (req, res) => {
     // Generate order number
     const orderNumber = await generateOrderNumber();
 
-    // Calculate grand total including delivery fee
-    const grandTotal = cart.grandTotal + deliveryFee;
+    // Delivery fee is quoted from the cart, not trusted from the client.
+    const quotedDeliveryFee = quoteDeliveryFee(cart.grandTotal);
+    const grandTotal = cart.grandTotal + quotedDeliveryFee;
+    const quotedSlot =
+      deliverySlot?.date && deliverySlot?.slot
+        ? deliverySlot
+        : quoteDeliverySlot();
 
     // Create order
     const order = new Order({
@@ -251,28 +262,38 @@ router.post("/", async (req, res) => {
       subtotal: cart.subtotal,
       totalDiscount: cart.totalDiscount,
       taxAmount: cart.taxAmount,
-      deliveryFee,
+      deliveryFee: quotedDeliveryFee,
       grandTotal,
       payment: {
         method: paymentMethod,
         status: paymentMethod === "cod" ? "pending" : "paid",
         isCod: paymentMethod === "cod",
-        transactionId: paymentDetails?.razorpayPaymentId,
+        transactionId:
+          paymentMethod === "balance" ? "wallet" : paymentDetails?.razorpayPaymentId,
         gatewayOrderId: paymentDetails?.razorpayOrderId,
         gatewaySignature: paymentDetails?.razorpaySignature,
         paidAt: paymentMethod === "cod" ? undefined : new Date(),
       },
       address: {
         addressId,
-        snapshot: addressSnapshot,
+        snapshot: normalizeAddressSnapshot(addressSnapshot),
       },
-      deliverySlot,
+      deliverySlot: quotedSlot,
       status: paymentMethod === "cod" ? "placed" : "confirmed",
       orderNumber,
       notes,
     });
 
     await order.save({ session });
+
+    if (paymentMethod === "balance") {
+      await debitWallet({
+        userId,
+        amount: grandTotal,
+        orderId: order._id,
+        session,
+      });
+    }
 
     // Create payment record
     const payment = new Payment({
@@ -283,8 +304,10 @@ router.post("/", async (req, res) => {
       status: paymentMethod === "cod" ? "pending" : "success",
       isCod: paymentMethod === "cod",
       gateway:
-        paymentMethod === "cod"
-          ? undefined
+        paymentMethod === "cod" || paymentMethod === "balance"
+          ? paymentMethod === "balance"
+            ? { name: "wallet", response: { source: "checkout" } }
+            : undefined
           : {
               name: "razorpay",
               paymentId: paymentDetails?.razorpayPaymentId,
@@ -326,9 +349,9 @@ router.post("/", async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     console.error("Create order error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to create order",
+      message: error.statusCode ? error.message : "Failed to create order",
       error: error.message,
     });
   } finally {
@@ -671,9 +694,10 @@ router.put("/:id/status", async (req, res) => {
 
     const updateData = { status };
 
-    /** Handover code is app-only (order tracking); SMS is not sent. */
+    let handoverPlain = null;
     if (status === "out_for_delivery" && prevStatus !== "out_for_delivery") {
-      const plain = generateHandoverCode();
+      handoverPlain = generateHandoverCode();
+      const plain = handoverPlain;
       updateData.deliveryHandoverCipher = encryptHandoverCode(plain);
       updateData.deliveryHandoverGeneratedAt = new Date();
       updateData.deliveryHandoverWrongAttempts = 0;
@@ -730,6 +754,17 @@ router.put("/:id/status", async (req, res) => {
       new: true,
       runValidators: true,
     }).populate("items.product", "name image");
+
+    if (handoverPlain) {
+      const phone =
+        order.address?.snapshot?.phone ||
+        updatedOrder?.address?.snapshot?.phone;
+      if (phone) {
+        sendHandoverSmsIfConfigured(phone, handoverPlain, order.orderNumber).catch(
+          (err) => console.error("Handover SMS error:", err.message),
+        );
+      }
+    }
 
     res.json({
       success: true,
@@ -954,11 +989,23 @@ router.post("/:id/cancel", async (req, res) => {
       });
     }
 
+    if (order.payment.method === "balance" && order.payment.status === "paid") {
+      await creditWallet({
+        userId: order.user,
+        amount: order.grandTotal,
+        reason: "refund",
+        orderId: order._id,
+        session,
+      });
+      order.payment.status = "refunded";
+    } else {
+      order.payment.status = "cancelled";
+    }
+
     // Update order status
     order.status = "cancelled";
     order.cancelledAt = new Date();
     order.cancelReason = reason;
-    order.payment.status = "cancelled";
     order.deliveryHandoverVerifiedAt = null;
     order.deliveryHandoverVerifiedByDriver = null;
     order.deliveryHandoverCipher = null;
@@ -970,7 +1017,7 @@ router.post("/:id/cancel", async (req, res) => {
     // Update payment status
     await Payment.findOneAndUpdate(
       { order: order._id },
-      { status: "cancelled" },
+      { status: order.payment.method === "balance" ? "refunded" : "cancelled" },
       { session },
     );
 
