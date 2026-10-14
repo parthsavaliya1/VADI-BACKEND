@@ -108,6 +108,11 @@ router.get("/me", async (req, res) => {
   try {
     const seller = await findSellerAccount(req.query);
     if (!seller) {
+      // A customer opening "Sell on VADI" has no shop yet. That is the signup
+      // form, not an error. Admin lookups by seller id still require a shop.
+      if (req.query.userId && mongoose.Types.ObjectId.isValid(req.query.userId)) {
+        return res.json({ success: true, data: null });
+      }
       return res.status(400).json({ success: false, message: "Seller account is required" });
     }
     const fresh = await Seller.findById(seller._id).select("+passwordHash").lean();
