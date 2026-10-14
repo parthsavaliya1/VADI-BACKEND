@@ -150,14 +150,88 @@ router.put("/me/products/:id", async (req, res) => {
     if (!product) {
       return res.status(404).json({ success: false, message: "Product not found" });
     }
-    if (typeof req.body.isActive === "boolean") product.isActive = req.body.isActive;
-    if (req.body.stock !== undefined && product.variants?.[0]) {
-      product.variants[0].stock = Number(req.body.stock);
+
+    const editingDetails = req.body.name !== undefined || Array.isArray(req.body.variants);
+    if (!editingDetails) {
+      if (typeof req.body.isActive === "boolean") product.isActive = req.body.isActive;
+      if (req.body.stock !== undefined && product.variants?.[0]) {
+        product.variants[0].stock = Number(req.body.stock);
+      }
+      await product.save();
+      return res.json({ success: true, data: product, message: "Product updated" });
     }
+
+    if (!String(req.body.name || "").trim()) {
+      return res.status(400).json({ success: false, message: "Product name is required" });
+    }
+    if (!req.body.category || !mongoose.Types.ObjectId.isValid(req.body.category)) {
+      return res.status(400).json({ success: false, message: "Category is required" });
+    }
+    if (!Array.isArray(req.body.variants) || req.body.variants.length === 0) {
+      return res.status(400).json({ success: false, message: "At least one variant is required" });
+    }
+
+    const variants = req.body.variants.map((variant) => ({
+      ...variant,
+      image: typeof variant.image === "string" ? variant.image.trim() : "",
+    }));
+    const defaults = variants.filter((variant) => variant.isDefault);
+    if (defaults.length > 1) {
+      return res.status(400).json({ success: false, message: "Only one variant can be set as default" });
+    }
+    if (defaults.length === 0) variants[0].isDefault = true;
+
+    if (req.body.name !== product.name) {
+      let slug = String(req.body.name)
+        .toLowerCase()
+        .trim()
+        .replace(/[^\w\s-]/g, "")
+        .replace(/[\s_-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      const conflict = await Product.findOne({ slug, _id: { $ne: product._id } });
+      product.slug = conflict ? `${slug}-${Date.now()}` : slug;
+    }
+
+    let offerEndsAt = product.offerEndsAt;
+    if (Object.prototype.hasOwnProperty.call(req.body, "offerEndsAt")) {
+      if (req.body.offerEndsAt === null || req.body.offerEndsAt === "") {
+        offerEndsAt = null;
+      } else {
+        const parsed = new Date(req.body.offerEndsAt);
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({ success: false, message: "Invalid offer end date" });
+        }
+        offerEndsAt = parsed;
+      }
+    }
+
+    product.name = String(req.body.name).trim();
+    product.description = req.body.description ?? product.description;
+    product.brand = req.body.brand ?? product.brand;
+    product.category = req.body.category;
+    product.unit = req.body.unit || product.unit;
+    product.image = req.body.image || variants.find((variant) => variant.image)?.image || "";
+    product.images = Array.isArray(req.body.images) ? req.body.images : product.images;
+    product.isOrganic = Boolean(req.body.isOrganic);
+    if (typeof req.body.isActive === "boolean") product.isActive = req.body.isActive;
+    product.offerEndsAt = offerEndsAt;
+    product.discount = Number(req.body.discount) || 0;
+    if (req.body.tax) product.tax = req.body.tax;
+    product.tags = Array.isArray(req.body.tags) ? req.body.tags : product.tags;
+    product.searchKeywords = Array.isArray(req.body.searchKeywords)
+      ? req.body.searchKeywords
+      : product.searchKeywords;
+    if (req.body.shelfLife) product.shelfLife = req.body.shelfLife;
+    if (typeof req.body.expiryRequired === "boolean") product.expiryRequired = req.body.expiryRequired;
+    product.storageInstructions = req.body.storageInstructions ?? product.storageInstructions;
+    product.variants = variants;
+    product.seller.sellerId = seller._id;
+    product.seller.sellerName = seller.name;
+
     await product.save();
     res.json({ success: true, data: product, message: "Product updated" });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Failed to update product" });
+    res.status(500).json({ success: false, message: error.message || "Failed to update product" });
   }
 });
 

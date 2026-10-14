@@ -22,6 +22,7 @@ const orderRoutes = require("./orderRoute");
 const paymentRoutes = require("./paymentRoute");
 const dealSettingsRoutes = require("./dealSettingsRoutes");
 const homeSectionSettingsRoutes = require("./homeSectionSettingsRoutes");
+const appThemeRoutes = require("./appThemeRoutes");
 
 const router = express.Router();
 
@@ -719,5 +720,7 @@ router.get("/deal-settings", forward(dealSettingsRoutes, "/"));
 router.put("/deal-settings", forward(dealSettingsRoutes, "/"));
 router.get("/home-section-settings", forward(homeSectionSettingsRoutes, "/"));
 router.put("/home-section-settings", forward(homeSectionSettingsRoutes, "/"));
+router.get("/app-theme", forward(appThemeRoutes, "/"));
+router.put("/app-theme", forward(appThemeRoutes, "/"));
 
 module.exports = router;

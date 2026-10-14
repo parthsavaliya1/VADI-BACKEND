@@ -21,6 +21,7 @@ const adminRoutes = require("./routes/adminRoutes");
 const sellerRoutes = require("./routes/sellerRoutes");
 const dealSettingsRoutes = require("./routes/dealSettingsRoutes");
 const homeSectionSettingsRoutes = require("./routes/homeSectionSettingsRoutes");
+const appThemeRoutes = require("./routes/appThemeRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const appConfigRoutes = require("./routes/appConfigRoutes");
 const driverAuthRoutes = require("./routes/driverAuthRoutes");
@@ -34,7 +35,12 @@ app.set("trust proxy", 1);
 
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://localhost:3002"],
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:3002",
+      "http://localhost:5173",
+      "http://localhost:4173",
+    ],
     credentials: true,
   }),
 );
@@ -67,6 +73,16 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/admin", adminPanelRoutes);
 app.use("/deal-settings", dealSettingsRoutes);
 app.use("/home-section-settings", homeSectionSettingsRoutes);
+// Public colour theme — read-only from any origin (website, app). Changes go through /api/admin/app-theme.
+app.use(
+  "/app-theme",
+  cors(),
+  (req, res, next) =>
+    req.method === "GET" || req.method === "OPTIONS"
+      ? next()
+      : res.status(405).json({ success: false, message: "Method not allowed" }),
+  appThemeRoutes
+);
 app.use("/notifications", notificationRoutes);
 app.use("/api/driver", driverAuthRoutes);
 

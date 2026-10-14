@@ -6,6 +6,7 @@ const adminAuth = require("../middleware/adminMiddleware");
 const Driver = require("../models/Driver");
 const { normalizePhone } = require("../utils/twoFactorSms");
 const { getFirebaseMessaging } = require("../config/firebaseAdmin");
+const { isExpoPushToken, sendExpoPush } = require("../utils/expoPushSend");
 const Banner = require("../models/Banner");
 const Notification = require("../models/Notification");
 
@@ -333,32 +334,46 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
       });
     }
 
+    const expoTokens = [];
     const validFcmTokens = [];
     const invalidTokens = new Set();
     const failureReasons = {};
 
     tokens.forEach((token) => {
-      if (typeof token === "string" && !token.startsWith("ExponentPushToken[")) {
-        validFcmTokens.push(token);
-      } else {
+      if (typeof token !== "string" || !token.trim()) {
         invalidTokens.add(token);
-        failureReasons["invalid-fcm-token"] =
-          (failureReasons["invalid-fcm-token"] || 0) + 1;
+        failureReasons["invalid-token"] = (failureReasons["invalid-token"] || 0) + 1;
+        return;
       }
+      if (isExpoPushToken(token)) {
+        expoTokens.push(token);
+        return;
+      }
+      validFcmTokens.push(token);
     });
 
-    if (!validFcmTokens.length) {
-      if (invalidTokens.size > 0) {
-        await User.updateMany(
-          { pushToken: { $in: Array.from(invalidTokens) } },
-          {
-            $set: {
-              pushToken: null,
-              pushTokenUpdatedAt: new Date(),
-            },
-          },
-        );
-      }
+    const notificationTitle = String(title);
+    const notificationBody = String(body);
+    const imageUrlStr = imageUrl ? String(imageUrl) : "";
+
+    let successCount = 0;
+    let failureCount = 0;
+
+    if (expoTokens.length) {
+      const expoResult = await sendExpoPush(expoTokens, {
+        title: notificationTitle,
+        body: notificationBody,
+        imageUrl: imageUrlStr,
+      });
+      successCount += expoResult.successCount;
+      failureCount += expoResult.failureCount;
+      expoResult.invalidTokens.forEach((token) => invalidTokens.add(token));
+      Object.entries(expoResult.failureReasons).forEach(([code, count]) => {
+        failureReasons[code] = (failureReasons[code] || 0) + count;
+      });
+    }
+
+    if (!validFcmTokens.length && !expoTokens.length) {
       const notificationDoc = await Notification.create({
         ...baseFields,
         stats: {
@@ -370,7 +385,7 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
       });
       return res.json({
         success: true,
-        message: "Notification saved; no valid Firebase push tokens",
+        message: "Notification saved; no valid push tokens",
         data: notificationDoc,
         stats: {
           totalTokens: tokens.length,
@@ -382,14 +397,46 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
       });
     }
 
-    const messaging = getFirebaseMessaging();
+    const messaging = validFcmTokens.length ? getFirebaseMessaging() : null;
     const chunkSize = 500;
-    let successCount = 0;
-    let failureCount = 0;
 
-    const notificationTitle = String(title);
-    const notificationBody = String(body);
-    const imageUrlStr = imageUrl ? String(imageUrl) : "";
+    if (!messaging) {
+      if (invalidTokens.size > 0) {
+        await User.updateMany(
+          { pushToken: { $in: Array.from(invalidTokens) } },
+          {
+            $set: {
+              pushToken: null,
+              pushTokenUpdatedAt: new Date(),
+            },
+          },
+        );
+      }
+
+      const notificationDoc = await Notification.create({
+        ...baseFields,
+        stats: {
+          totalTokens: tokens.length,
+          successCount,
+          failureCount,
+          invalidTokensRemoved: invalidTokens.size,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: "Notification broadcast completed",
+        data: notificationDoc,
+        stats: {
+          totalTokens: tokens.length,
+          successCount,
+          failureCount,
+          invalidTokensRemoved: invalidTokens.size,
+          failureReasons,
+        },
+      });
+    }
+
 
     for (let i = 0; i < validFcmTokens.length; i += chunkSize) {
       const tokenChunk = validFcmTokens.slice(i, i + chunkSize);
@@ -406,6 +453,7 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
         },
         android: {
           priority: "high",
+          ttl: 28 * 24 * 60 * 60 * 1000,
           notification: {
             channelId: "default",
             sound: "default",
@@ -416,6 +464,9 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
         apns: {
           headers: {
             "apns-priority": "10",
+            "apns-expiration": String(
+              Math.floor(Date.now() / 1000) + 28 * 24 * 60 * 60,
+            ),
           },
           payload: {
             aps: {
@@ -461,7 +512,7 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
       stats: {
         totalTokens: tokens.length,
         successCount,
-        failureCount: failureCount + (tokens.length - validFcmTokens.length),
+        failureCount,
         invalidTokensRemoved: invalidTokens.size,
       },
     });
@@ -473,7 +524,7 @@ router.post("/notifications/broadcast", adminAuth, async (req, res) => {
       stats: {
         totalTokens: tokens.length,
         successCount,
-        failureCount: failureCount + (tokens.length - validFcmTokens.length),
+        failureCount,
         invalidTokensRemoved: invalidTokens.size,
         failureReasons,
       },
