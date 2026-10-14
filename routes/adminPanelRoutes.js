@@ -14,6 +14,8 @@ const {
   settleUnsettledPaidOrders,
 } = require("../utils/commission");
 const { readFeeSettings, DRIVER_FEE_MODES } = require("../utils/deliveryQuote");
+const { creditWallet } = require("../utils/wallet");
+const { reverseOrderCommission } = require("../utils/commission");
 
 const productRoutes = require("./productRoutes");
 const categoryRoutes = require("./categoryRoutes");
@@ -722,5 +724,107 @@ router.get("/home-section-settings", forward(homeSectionSettingsRoutes, "/"));
 router.put("/home-section-settings", forward(homeSectionSettingsRoutes, "/"));
 router.get("/app-theme", forward(appThemeRoutes, "/"));
 router.put("/app-theme", forward(appThemeRoutes, "/"));
+router.use("/coupons", require("./couponRoutes").admin);
+
+router.get("/returns", async (req, res) => {
+  try {
+    const orders = await Order.find({ "returnRequest.status": { $exists: true, $ne: null } })
+      .populate("user", "name phone email")
+      .sort({ "returnRequest.requestedAt": -1 })
+      .limit(100)
+      .lean();
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load returns" });
+  }
+});
+
+router.put("/returns/:id", async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const { action, adminNote } = req.body;
+    if (!["approve", "reject"].includes(action)) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: "Action must be approve or reject" });
+    }
+    const order = await Order.findById(req.params.id).session(session);
+    if (!order || order.returnRequest?.status !== "pending") {
+      await session.abortTransaction();
+      return res.status(404).json({ success: false, message: "Pending return not found" });
+    }
+
+    const note = String(adminNote || "").trim();
+    const paidOnline =
+      order.payment?.status === "paid" && order.payment?.method !== "cod";
+    const patch = {
+      "returnRequest.adminNote": note,
+      "returnRequest.resolvedAt": new Date(),
+    };
+
+    if (action === "reject") {
+      patch["returnRequest.status"] = "rejected";
+      await Order.updateOne({ _id: order._id }, { $set: patch }, { session });
+      await session.commitTransaction();
+      return res.json({ success: true, message: "Return rejected" });
+    }
+
+    if (paidOnline) {
+      await creditWallet({
+        userId: order.user,
+        amount: order.grandTotal,
+        reason: "refund",
+        orderId: order._id,
+        session,
+      });
+      patch["payment.status"] = "refunded";
+      patch["returnRequest.refundAmount"] = order.grandTotal;
+      patch["returnRequest.refundedTo"] = "wallet";
+      await Payment.findOneAndUpdate(
+        { order: order._id },
+        {
+          status: "refunded",
+          refund: {
+            amount: order.grandTotal,
+            reason: order.returnRequest.reason,
+            refundedAt: new Date(),
+          },
+        },
+        { session },
+      );
+    } else {
+      patch["returnRequest.refundedTo"] = "none";
+    }
+
+    patch["returnRequest.status"] = "approved";
+    patch.status = "returned";
+    await Order.updateOne({ _id: order._id }, { $set: patch }, { session });
+    for (const item of order.items) {
+      await Product.updateOne(
+        { _id: item.product, "variants._id": item.variantId },
+        { $inc: { "variants.$.stock": item.quantity } },
+        { session },
+      );
+    }
+    await session.commitTransaction();
+    if (paidOnline) await reverseOrderCommission(order._id);
+    res.json({
+      success: true,
+      message: paidOnline
+        ? "Return approved and refunded to the customer wallet"
+        : "Return approved",
+      data: order,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Resolve return error:", error);
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to update return",
+    });
+  } finally {
+    session.endSession();
+  }
+});
 
 module.exports = router;

@@ -89,6 +89,7 @@ router.get("/", async (req, res) => {
     if (featured !== undefined) filter.featured = featured === "true";
     if (trending !== undefined) filter.trending = trending === "true";
     if (bestDeal !== undefined) filter.bestDeal = bestDeal === "true";
+    if (req.query.isOrganic === "true") filter.isOrganic = true;
 
     // Search functionality
     if (search) {
@@ -109,6 +110,36 @@ router.get("/", async (req, res) => {
       filter["variants.price"] = priceFilter;
     }
 
+    const extra = [];
+    if (req.query.inStock === "true") {
+      extra.push({
+        variants: {
+          $elemMatch: { stock: { $gt: 0 }, isActive: { $ne: false } },
+        },
+      });
+    }
+    if (req.query.onSale === "true") {
+      extra.push({
+        $or: [
+          { discount: { $gt: 0 } },
+          {
+            $expr: {
+              $anyElementTrue: {
+                $map: {
+                  input: "$variants",
+                  as: "v",
+                  in: { $lt: ["$$v.price", "$$v.mrp"] },
+                },
+              },
+            },
+          },
+        ],
+      });
+    }
+    if (extra.length) {
+      filter.$and = [...(filter.$and || []), ...extra];
+    }
+
     if (req.query.includePending !== "true") {
       const visible = {
         $or: [
@@ -125,21 +156,47 @@ router.get("/", async (req, res) => {
       }
     }
 
-    // Sorting
-    const sort = {};
-    sort[sortBy] = sortOrder === "asc" ? 1 : -1;
+    const sortFields = {
+      createdAt: "createdAt",
+      rating: "rating",
+      name: "name",
+      price: "price",
+    };
+    const sortKey = sortFields[sortBy] || "createdAt";
+    const sortDir = sortOrder === "asc" ? 1 : -1;
 
     // Pagination
     const skip = (Number(page) - 1) * Number(limit);
 
-    // Execute query
-    const products = await Product.find(filter)
+    let products;
+    if (sortKey === "price") {
+      const ranked = await Product.aggregate([
+        { $match: filter },
+        { $addFields: { sortPrice: { $min: "$variants.price" } } },
+        { $sort: { sortPrice: sortDir } },
+        { $skip: skip },
+        { $limit: Number(limit) },
+        { $project: { _id: 1 } },
+      ]);
+      const orderedIds = ranked.map((row) => row._id);
+      const found = await Product.find({ _id: { $in: orderedIds } })
+        .populate("category", "name slug")
+        .populate("seller.sellerId", "name code")
+        .lean();
+      const orderMap = new Map(orderedIds.map((id, index) => [String(id), index]));
+      products = found.sort(
+        (a, b) => orderMap.get(String(a._id)) - orderMap.get(String(b._id)),
+      );
+    } else {
+      const sort = { [sortKey]: sortDir };
+      products = await Product.find(filter)
       .populate("category", "name slug")
       .populate("seller.sellerId", "name code")
       .sort(sort)
       .limit(Number(limit))
       .skip(skip)
       .lean();
+    }
 
     // Get total count
     const total = await Product.countDocuments(filter);
@@ -244,18 +301,39 @@ router.get("/:id/similar", async (req, res) => {
       .split(" ")
       .filter((w) => w.length > 2);
 
-    const similarProducts = await Product.find({
-      _id: { $ne: product._id },
-      category: product.category, // ✅ ObjectId
-      isActive: true,
-      $or: [
-        { name: { $regex: keywords.join("|"), $options: "i" } },
-        { brand: product.brand },
-      ],
-    })
-      .limit(8)
-      .populate("category", "name slug")
-      .populate("seller.sellerId", "name code");
+    const keywordQuery =
+      keywords.length > 0
+        ? {
+            _id: { $ne: product._id },
+            category: product.category,
+            isActive: true,
+            $or: [
+              { name: { $regex: keywords.join("|"), $options: "i" } },
+              ...(product.brand ? [{ brand: product.brand }] : []),
+            ],
+          }
+        : null;
+
+    let similarProducts = keywordQuery
+      ? await Product.find(keywordQuery)
+          .limit(8)
+          .populate("category", "name slug")
+          .populate("seller.sellerId", "name code")
+      : [];
+
+    if (similarProducts.length < 4) {
+      const more = await Product.find({
+        _id: {
+          $nin: [product._id, ...similarProducts.map((item) => item._id)],
+        },
+        category: product.category,
+        isActive: true,
+      })
+        .limit(8 - similarProducts.length)
+        .populate("category", "name slug")
+        .populate("seller.sellerId", "name code");
+      similarProducts = similarProducts.concat(more);
+    }
 
     res.json({
       success: true,

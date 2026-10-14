@@ -7,6 +7,7 @@ const mongoose = require("mongoose");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const { quoteOrderFees } = require("../utils/deliveryQuote");
+const { quoteCoupon } = require("../utils/coupon");
 const {
   settleOrderCommission,
   reverseOrderCommission,
@@ -264,8 +265,21 @@ router.post("/create-order", async (req, res) => {
       });
     }
 
-    const { deliveryFee } = await quoteOrderFees(cart.grandTotal);
-    const amount = Number(cart.grandTotal || 0) + deliveryFee;
+    let couponDiscount = 0;
+    if (req.body.couponCode) {
+      const quote = await quoteCoupon({
+        code: req.body.couponCode,
+        userId,
+        items: cart.items,
+      });
+      couponDiscount = quote.discountAmount;
+    }
+    const merchandise = Math.max(
+      0,
+      Math.round((Number(cart.grandTotal || 0) - couponDiscount) * 100) / 100,
+    );
+    const { deliveryFee } = await quoteOrderFees(merchandise);
+    const amount = merchandise + deliveryFee;
     if (amount <= 0) {
       return res.status(400).json({
         success: false,
@@ -298,9 +312,9 @@ router.post("/create-order", async (req, res) => {
     });
   } catch (error) {
     console.error("Create Razorpay order error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to create Razorpay order",
+      message: error.statusCode ? error.message : "Failed to create Razorpay order",
       error: error.message,
     });
   }

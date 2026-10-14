@@ -228,6 +228,12 @@ function buildOrderInvoicePdf(order) {
       y = doc.y + 6;
     }
 
+    if (Number(o.couponDiscount) > 0) {
+      doc.fillColor(TEXT_MUTED).text(`Coupon${o.couponCode ? ` (${o.couponCode})` : ""}`, totalsX, y, { width: 100, align: "left" });
+      doc.text(`−${money(o.couponDiscount)}`, totalsX + 100, y, { width: totalsW - 100, align: "right" });
+      y = doc.y + 6;
+    }
+
     doc.fillColor("#111").text(`Tax`, totalsX, y, { width: 100, align: "left" });
     doc.text(money(o.taxAmount), totalsX + 100, y, { width: totalsW - 100, align: "right" });
     y = doc.y + 6;

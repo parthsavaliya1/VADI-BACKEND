@@ -27,6 +27,9 @@ const {
   settleOrderCommission,
   reverseOrderCommission,
 } = require("../utils/commission");
+const { quoteCoupon } = require("../utils/coupon");
+
+const RETURN_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const settlePaidOrder = async (orderId) => {
   try {
@@ -105,17 +108,28 @@ const validateOrderStock = async (items) => {
 /**
  * Reduce stock for order items
  */
-const reduceStock = async (items) => {
+const reduceStock = async (items, session) => {
   for (const item of items) {
-    await Product.updateOne(
+    const updated = await Product.updateOne(
       {
         _id: item.product,
-        "variants._id": item.variantId,
+        variants: {
+          $elemMatch: {
+            _id: item.variantId,
+            stock: { $gte: item.quantity },
+          },
+        },
       },
-      {
-        $inc: { "variants.$.stock": -item.quantity },
-      },
+      { $inc: { "variants.$.stock": -item.quantity } },
+      { session },
     );
+    if (!updated.modifiedCount) {
+      const error = new Error(
+        `Insufficient stock for ${item.productName || "a cart item"}`,
+      );
+      error.statusCode = 400;
+      throw error;
+    }
   }
 };
 
@@ -257,9 +271,22 @@ router.post("/", async (req, res) => {
     const orderNumber = await generateOrderNumber();
 
     // Delivery fee and driver pay are quoted from saved rules, not from the client.
-    const quoted = await quoteOrderFees(cart.grandTotal);
+    let couponQuote = null;
+    if (req.body.couponCode) {
+      couponQuote = await quoteCoupon({
+        code: req.body.couponCode,
+        userId,
+        items: cart.items,
+        session,
+      });
+    }
+    const merchandise = Math.max(
+      0,
+      Math.round((cart.grandTotal - (couponQuote?.discountAmount || 0)) * 100) / 100,
+    );
+    const quoted = await quoteOrderFees(merchandise);
     const quotedDeliveryFee = quoted.deliveryFee;
-    const grandTotal = cart.grandTotal + quotedDeliveryFee;
+    const grandTotal = Math.round((merchandise + quotedDeliveryFee) * 100) / 100;
     const quotedSlot =
       deliverySlot?.date && deliverySlot?.slot
         ? deliverySlot
@@ -279,6 +306,8 @@ router.post("/", async (req, res) => {
       driverFeeMode: quoted.settings.driverFeeMode,
       driverFeeValue: quoted.settings.driverFeeValue,
       grandTotal,
+      couponCode: couponQuote?.code || "",
+      couponDiscount: couponQuote?.discountAmount || 0,
       payment: {
         method: paymentMethod,
         status: paymentMethod === "cod" ? "pending" : "paid",
@@ -300,6 +329,17 @@ router.post("/", async (req, res) => {
     });
 
     await order.save({ session });
+
+    if (couponQuote) {
+      await quoteCoupon({
+        code: couponQuote.code,
+        userId,
+        items: cart.items,
+        session,
+        redeem: true,
+        orderId: order._id,
+      });
+    }
 
     if (paymentMethod === "balance") {
       await debitWallet({
@@ -336,8 +376,8 @@ router.post("/", async (req, res) => {
 
     await payment.save({ session });
 
-    // Reduce stock
-    await reduceStock(cart.items);
+    // Reduce stock inside the same transaction so a failed order does not change stock.
+    await reduceStock(cart.items, session);
 
     // Mark cart as converted
     cart.status = "converted";
@@ -1057,6 +1097,63 @@ router.post("/:id/cancel", async (req, res) => {
     });
   } finally {
     session.endSession();
+  }
+});
+
+router.post("/:id/return", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId, reason } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Order and user are required" });
+    }
+    const note = String(reason || "").trim();
+    if (note.length < 5) {
+      return res.status(400).json({
+        success: false,
+        message: "Please describe the issue in at least 5 characters",
+      });
+    }
+
+    const order = await Order.findById(id);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    if (order.user.toString() !== String(userId)) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+    if (order.status !== "delivered") {
+      return res.status(400).json({
+        success: false,
+        message: "You can request a return only after the order is delivered",
+      });
+    }
+    if (order.returnRequest?.status) {
+      return res.status(400).json({
+        success: false,
+        message: `A return is already ${order.returnRequest.status}`,
+      });
+    }
+    const deliveredAt = order.deliveredAt || order.updatedAt;
+    if (Date.now() - new Date(deliveredAt).getTime() > RETURN_WINDOW_MS) {
+      return res.status(400).json({
+        success: false,
+        message: "Returns are accepted within 24 hours of delivery",
+      });
+    }
+
+    await Order.findByIdAndUpdate(id, {
+      returnRequest: {
+        status: "pending",
+        reason: note,
+        requestedAt: new Date(),
+        refundAmount: 0,
+        refundedTo: "none",
+      },
+    });
+    const updated = await Order.findById(id);
+    res.json({ success: true, message: "Return request sent", data: updated });
+  } catch (error) {
+    console.error("Return request error:", error);
+    res.status(500).json({ success: false, message: "Failed to request return" });
   }
 });
 

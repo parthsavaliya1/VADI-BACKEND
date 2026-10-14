@@ -29,6 +29,8 @@ const adminPanelRoutes = require("./routes/adminPanelRoutes");
 const walletRoutes = require("./routes/walletRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
 const feeRoutes = require("./routes/feeRoutes");
+const couponRoutes = require("./routes/couponRoutes");
+const wishlistRoutes = require("./routes/wishlistRoutes");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -66,6 +68,8 @@ app.use("/payments", paymentRoute);
 app.use("/wallet", walletRoutes);
 app.use("/cart", cartRoute);
 app.use("/fees", feeRoutes);
+app.use("/coupons", couponRoutes);
+app.use("/wishlist", wishlistRoutes);
 app.use("/reviews", reviewRoute);
 app.use("/sellers", sellerRoutes);
 app.use("/api/admin", adminAuthRoutes);

@@ -177,6 +177,17 @@ const OrderSchema = new mongoose.Schema(
       min: 0,
     },
 
+    couponCode: {
+      type: String,
+      default: "",
+    },
+
+    couponDiscount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
     /* ================= PAYMENT (COD READY) ================= */
 
     payment: {
@@ -259,6 +270,27 @@ const OrderSchema = new mongoose.Schema(
     cancelReason: String,
 
     deliveredAt: Date,
+
+    returnRequest: {
+      status: {
+        type: String,
+        enum: ["pending", "approved", "rejected"],
+      },
+      reason: String,
+      requestedAt: Date,
+      resolvedAt: Date,
+      adminNote: String,
+      refundAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      refundedTo: {
+        type: String,
+        enum: ["wallet", "none"],
+        default: "none",
+      },
+    },
 
     /**
      * Delivery handover (6-digit code): generated when status → out_for_delivery (in-app only; no SMS).
