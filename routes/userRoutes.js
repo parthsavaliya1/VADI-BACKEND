@@ -1,5 +1,12 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const User = require("../models/User");
+const Address = require("../models/Address");
+const Cart = require("../models/Cart");
+const Wallet = require("../models/Wallet");
+const WalletTransaction = require("../models/WalletTransaction");
+const Review = require("../models/Review");
+const Seller = require("../models/Seller");
 
 const router = express.Router();
 
@@ -40,6 +47,50 @@ router.patch("/:id", async (req, res) => {
   } catch (error) {
     console.error("PATCH /api/users/:id error:", error?.message || error);
     return res.status(500).json({ message: "Failed to update user" });
+  }
+});
+
+/**
+ * DELETE /api/users/:id
+ * "Delete account" from the app (Profile → About VADI → Delete account).
+ *
+ * Removes the user document and all personal data linked to it (addresses,
+ * cart, wallet + transactions, reviews, seller profile). Orders and payments
+ * are kept for accounting/tax records; they only hold a dangling user id and
+ * the delivery snapshot that was already captured at checkout.
+ */
+router.delete("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid user id" });
+    }
+
+    const user = await User.findById(id).select("_id role").lean();
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    if (user.role === "admin") {
+      return res
+        .status(403)
+        .json({ message: "Admin accounts cannot be deleted from the app" });
+    }
+
+    await Promise.all([
+      Address.deleteMany({ user: id }),
+      Cart.deleteMany({ user: id }),
+      WalletTransaction.deleteMany({ user: id }),
+      Wallet.deleteMany({ user: id }),
+      Review.deleteMany({ user: id }),
+      Seller.deleteMany({ user: id }),
+    ]);
+
+    await User.findByIdAndDelete(id);
+
+    return res.json({ success: true, message: "Account deleted" });
+  } catch (error) {
+    console.error("DELETE /api/users/:id error:", error?.message || error);
+    return res.status(500).json({ message: "Failed to delete account" });
   }
 });
 
