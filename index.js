@@ -37,14 +37,21 @@ const { runDueReminders } = require("./utils/repeatReminders");
 const app = express();
 app.set("trust proxy", 1);
 
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3002",
+  "http://localhost:5173",
+  "http://localhost:4173",
+  "https://vadi-admin.onrender.com",
+  ...(process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+];
+
 app.use(
   cors({
-    origin: [
-      "http://localhost:3000",
-      "http://localhost:3002",
-      "http://localhost:5173",
-      "http://localhost:4173",
-    ],
+    origin: allowedOrigins,
     credentials: true,
   }),
 );
