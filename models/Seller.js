@@ -62,6 +62,12 @@ const SellerSchema = new mongoose.Schema(
       type: String,
       select: false,
     },
+    bank: {
+      accountName: { type: String, trim: true, default: "" },
+      accountNumber: { type: String, trim: true, default: "" },
+      ifsc: { type: String, trim: true, uppercase: true, default: "" },
+      upi: { type: String, trim: true, default: "" },
+    },
   },
   { timestamps: true },
 );

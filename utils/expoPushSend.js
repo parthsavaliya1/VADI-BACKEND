@@ -14,7 +14,7 @@ function isExpoPushToken(token) {
  * Visible, high-priority Expo push. The OS shows this when the app is killed
  * and the screen is off — same delivery path as VADI Hisab.
  */
-async function sendExpoPush(tokens, { title, body, imageUrl }) {
+async function sendExpoPush(tokens, { title, body, imageUrl, data: extraData }) {
   const unique = [...new Set((tokens || []).map((t) => String(t).trim()).filter(isExpoPushToken))];
   const failureReasons = {};
   const invalidTokens = [];
@@ -26,7 +26,10 @@ async function sendExpoPush(tokens, { title, body, imageUrl }) {
   }
 
   const imageUrlStr = imageUrl ? String(imageUrl).trim() : "";
-  const data = { clickAction: "open_notifications" };
+  const data = {
+    clickAction: "open_notifications",
+    ...(extraData && typeof extraData === "object" ? extraData : {}),
+  };
   if (imageUrlStr) {
     data.imageUrl = imageUrlStr;
     data.image = imageUrlStr;

@@ -280,6 +280,18 @@ const OrderSchema = new mongoose.Schema(
       requestedAt: Date,
       resolvedAt: Date,
       adminNote: String,
+      items: [
+        {
+          variantId: mongoose.Schema.Types.ObjectId,
+          quantity: { type: Number, min: 1 },
+          action: {
+            type: String,
+            enum: ["refund", "replace"],
+            default: "refund",
+          },
+          productName: String,
+        },
+      ],
       refundAmount: {
         type: Number,
         default: 0,
@@ -287,9 +299,16 @@ const OrderSchema = new mongoose.Schema(
       },
       refundedTo: {
         type: String,
-        enum: ["wallet", "none"],
+        enum: ["wallet", "original", "none"],
         default: "none",
       },
+    },
+
+    /** Latest driver coordinates while the order is out for delivery. */
+    driverLocation: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      updatedAt: { type: Date, default: null },
     },
 
     /**

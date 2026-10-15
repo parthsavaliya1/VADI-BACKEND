@@ -97,6 +97,31 @@ const UserSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    preferredLanguage: {
+      type: String,
+      enum: ["en", "hi", "gu"],
+      default: "en",
+    },
+
+    referralCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      sparse: true,
+      unique: true,
+    },
+
+    referredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    referralRewardPaid: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true },
 );

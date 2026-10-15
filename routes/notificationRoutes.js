@@ -43,7 +43,14 @@ router.get("/", async (req, res) => {
 
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
 
-    const items = await Notification.find()
+    const items = await Notification.find({
+      $or: [
+        { user: userId },
+        { kind: "broadcast" },
+        { user: null },
+        { user: { $exists: false } },
+      ],
+    })
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean();

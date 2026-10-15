@@ -28,6 +28,23 @@ const NotificationSchema = new mongoose.Schema(
       ref: "Admin",
       default: null,
     },
+    /** Set for a single customer. Empty means an admin broadcast. */
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+    order: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Orders",
+      default: null,
+    },
+    kind: {
+      type: String,
+      enum: ["broadcast", "order", "stock", "support", "reminder", "referral"],
+      default: "broadcast",
+    },
   },
   { timestamps: true },
 );

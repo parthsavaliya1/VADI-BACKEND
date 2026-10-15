@@ -12,6 +12,7 @@ const {
   settleOrderCommission,
   reverseOrderCommission,
 } = require("../utils/commission");
+const { notifyOrderStatus } = require("../utils/orderNotify");
 
 const settlePaidOrder = async (orderId) => {
   try {
@@ -445,6 +446,9 @@ router.post("/webhook/razorpay", async (req, res) => {
       paymentDoc.gateway.response = payload;
       await paymentDoc.save();
 
+      const existingOrder = await Order.findById(paymentDoc.order).select(
+        "status user orderNumber",
+      );
       await Order.findByIdAndUpdate(paymentDoc.order, {
         "payment.status": "paid",
         "payment.transactionId": paymentEntity.id,
@@ -452,6 +456,9 @@ router.post("/webhook/razorpay", async (req, res) => {
         status: "confirmed",
       });
       await settlePaidOrder(paymentDoc.order);
+      if (existingOrder && existingOrder.status !== "confirmed" && existingOrder.status !== "delivered") {
+        await notifyOrderStatus(existingOrder, "confirmed");
+      }
     } else if (event === "payment.failed") {
       paymentDoc.status = "failed";
       paymentDoc.failureReason =
@@ -650,7 +657,7 @@ router.post("/verify", async (req, res) => {
 
     await payment.save();
 
-    // Update order
+    const existingOrder = await Order.findById(orderId).select("status user orderNumber");
     await Order.findByIdAndUpdate(orderId, {
       "payment.status": "paid",
       "payment.transactionId": gatewayPaymentIdFromBody,
@@ -658,6 +665,9 @@ router.post("/verify", async (req, res) => {
       status: "confirmed",
     });
     await settlePaidOrder(orderId);
+    if (existingOrder && existingOrder.status !== "confirmed" && existingOrder.status !== "delivered") {
+      await notifyOrderStatus(existingOrder, "confirmed");
+    }
 
     res.json({
       success: true,

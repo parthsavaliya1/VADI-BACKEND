@@ -21,6 +21,8 @@ const {
   generateHandoverCode,
   encryptHandoverCode,
 } = require("../utils/deliveryHandover");
+const { notifyOrderStatus } = require("../utils/orderNotify");
+const SellerPayout = require("../models/SellerPayout");
 
 async function findSellerAccount(query) {
   const sellerId = query.sellerId || query.id;
@@ -359,6 +361,64 @@ router.get("/me/dashboard", async (req, res) => {
   }
 });
 
+router.get("/me/payouts", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.query);
+    if (!seller) return res.status(404).json({ success: false, message: "Seller not found" });
+    const payouts = await SellerPayout.find({ seller: seller._id }).sort({ createdAt: -1 }).limit(50).lean();
+    res.json({ success: true, data: payouts, bank: seller.bank || {} });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load payouts" });
+  }
+});
+
+router.put("/me/bank", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.body);
+    if (!seller || seller.status !== "approved") {
+      return res.status(403).json({ success: false, message: "Approved seller only" });
+    }
+    const { accountName, accountNumber, ifsc, upi } = req.body || {};
+    seller.bank = {
+      accountName: String(accountName || "").trim(),
+      accountNumber: String(accountNumber || "").trim(),
+      ifsc: String(ifsc || "").trim().toUpperCase(),
+      upi: String(upi || "").trim(),
+    };
+    if (!seller.bank.accountNumber && !seller.bank.upi) {
+      return res.status(400).json({ success: false, message: "Add an account number or UPI id" });
+    }
+    await seller.save();
+    res.json({ success: true, data: seller.bank });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to save bank details" });
+  }
+});
+
+router.post("/me/payouts", async (req, res) => {
+  try {
+    const seller = await findSellerAccount(req.body);
+    if (!seller || seller.status !== "approved") {
+      return res.status(403).json({ success: false, message: "Approved seller only" });
+    }
+    if (!seller.bank?.accountNumber && !seller.bank?.upi) {
+      return res.status(400).json({ success: false, message: "Save bank or UPI details first" });
+    }
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount < 1) {
+      return res.status(400).json({ success: false, message: "Enter a valid amount" });
+    }
+    const pending = await SellerPayout.findOne({ seller: seller._id, status: "pending" });
+    if (pending) {
+      return res.status(400).json({ success: false, message: "You already have a payout waiting" });
+    }
+    const payout = await SellerPayout.create({ seller: seller._id, amount });
+    res.status(201).json({ success: true, data: payout });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to request payout" });
+  }
+});
+
 router.get("/me/earnings", async (req, res) => {
   try {
     const seller = await findSellerAccount(req.query);
@@ -500,6 +560,9 @@ router.put("/me/orders/:id/status", async (req, res) => {
     const updated = await Order.findByIdAndUpdate(req.params.id, updateData, { new: true });
     if (status === "cancelled" && order.payment?.status === "paid") {
       await reverseOrderCommission(order._id);
+    }
+    if (updated && prevStatus !== status) {
+      await notifyOrderStatus(updated, status, { handoverCode: handoverPlain });
     }
     res.json({ success: true, message: `Order marked ${status.replace(/_/g, " ")}`, data: updated });
   } catch (error) {

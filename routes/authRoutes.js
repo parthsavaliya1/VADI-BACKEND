@@ -6,6 +6,7 @@ const {
   verify2factorSession,
   enteredOtpMatchesStored,
 } = require("../utils/twoFactorSms");
+const { attachReferrer, ensureReferralCode } = require("../utils/referralReward");
 
 const router = express.Router();
 
@@ -298,7 +299,7 @@ router.post("/demo-login", async (req, res) => {
  */
 router.post("/signup", async (req, res) => {
   try {
-    const { name, phone, profileImage, role, privacyPolicyAccepted } = req.body;
+    const { name, phone, profileImage, role, privacyPolicyAccepted, referralCode } = req.body;
 
     if (!name || !phone) {
       return res.status(400).json({ error: "Name and phone are required" });
@@ -339,7 +340,8 @@ router.post("/signup", async (req, res) => {
       }
     }
 
-    await user.save();
+    await attachReferrer(user, referralCode);
+    await ensureReferralCode(user);
 
     return res.status(201).json(user);
   } catch (err) {

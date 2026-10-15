@@ -31,6 +31,8 @@ const uploadRoutes = require("./routes/uploadRoutes");
 const feeRoutes = require("./routes/feeRoutes");
 const couponRoutes = require("./routes/couponRoutes");
 const wishlistRoutes = require("./routes/wishlistRoutes");
+const supportRoutes = require("./routes/supportRoutes");
+const { runDueReminders } = require("./utils/repeatReminders");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -70,6 +72,7 @@ app.use("/cart", cartRoute);
 app.use("/fees", feeRoutes);
 app.use("/coupons", couponRoutes);
 app.use("/wishlist", wishlistRoutes);
+app.use("/support", supportRoutes);
 app.use("/reviews", reviewRoute);
 app.use("/sellers", sellerRoutes);
 app.use("/api/admin", adminAuthRoutes);
@@ -103,4 +106,8 @@ app.listen(PORT, () => {
       ? `Razorpay key loaded: ${razorpayKey.slice(0, 12)}…`
       : "Razorpay key missing",
   );
+  runDueReminders().catch((error) => console.error("Repeat reminder error:", error.message));
+  setInterval(() => {
+    runDueReminders().catch((error) => console.error("Repeat reminder error:", error.message));
+  }, 15 * 60 * 1000);
 });

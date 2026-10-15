@@ -8,6 +8,9 @@ const THEME_KEYS = [
   "classic-green",
   "olive-ivory",
   "teal-pistachio",
+  "winter",
+  "summer",
+  "monsoon",
 ];
 
 const AppThemeSettingsSchema = new mongoose.Schema(

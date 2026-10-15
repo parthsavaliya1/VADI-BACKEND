@@ -234,6 +234,13 @@ router.post("/add", async (req, res) => {
       });
     }
 
+    if (variant.expiresAt && new Date(variant.expiresAt) < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "This pack has passed its expiry date",
+      });
+    }
+
     // Find or create cart
     let cart = await Cart.findOne({ user: userId, status: "active" });
 

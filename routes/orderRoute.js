@@ -28,6 +28,10 @@ const {
   reverseOrderCommission,
 } = require("../utils/commission");
 const { quoteCoupon } = require("../utils/coupon");
+const { notifyOrderStatus } = require("../utils/orderNotify");
+const { notifyLowStock } = require("../utils/lowStock");
+const { rewardReferralOnDelivery } = require("../utils/referralReward");
+const RepeatReminder = require("../models/RepeatReminder");
 
 const RETURN_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -89,6 +93,15 @@ const validateOrderStock = async (items) => {
         productId: item.product,
         productName: item.productName,
         issue: "Variant not available",
+      });
+      continue;
+    }
+
+    if (variant.expiresAt && new Date(variant.expiresAt) < new Date()) {
+      stockIssues.push({
+        productId: item.product,
+        productName: item.productName,
+        issue: "This pack has passed its expiry date",
       });
       continue;
     }
@@ -388,6 +401,9 @@ router.post("/", async (req, res) => {
     if (order.payment.status === "paid") {
       await settlePaidOrder(order._id);
     }
+
+    await notifyOrderStatus(order, order.status === "confirmed" ? "confirmed" : "placed");
+    await notifyLowStock(cart.items);
 
     // Populate order details
     await order.populate("items.product", "name image");
@@ -815,6 +831,13 @@ router.put("/:id/status", async (req, res) => {
       runValidators: true,
     }).populate("items.product", "name image");
 
+    if (updatedOrder && prevStatus !== status) {
+      await notifyOrderStatus(updatedOrder, status, { handoverCode: handoverPlain });
+      if (status === "delivered") {
+        await rewardReferralOnDelivery(updatedOrder.user);
+      }
+    }
+
     res.json({
       success: true,
       message: `Order status updated to ${status}`,
@@ -961,6 +984,11 @@ router.post(
         await settlePaidOrder(order._id);
       }
 
+      if (updatedOrder) {
+        await notifyOrderStatus(updatedOrder, "delivered");
+        await rewardReferralOnDelivery(updatedOrder.user);
+      }
+
       return res.json({
         success: true,
         message: "Code verified — order marked as delivered.",
@@ -1082,6 +1110,8 @@ router.post("/:id/cancel", async (req, res) => {
       await reverseOrderCommission(order._id);
     }
 
+    await notifyOrderStatus(order, "cancelled");
+
     res.json({
       success: true,
       message: "Order cancelled successfully",
@@ -1103,7 +1133,7 @@ router.post("/:id/cancel", async (req, res) => {
 router.post("/:id/return", async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId, reason } = req.body;
+    const { userId, reason, items } = req.body;
     if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({ success: false, message: "Order and user are required" });
     }
@@ -1140,11 +1170,34 @@ router.post("/:id/return", async (req, res) => {
       });
     }
 
+    const returnItems = [];
+    if (Array.isArray(items) && items.length) {
+      for (const requested of items) {
+        const line = order.items.find(
+          (item) => String(item.variantId) === String(requested.variantId),
+        );
+        const quantity = Number(requested.quantity || 0);
+        if (!line || quantity < 1 || quantity > line.quantity) {
+          return res.status(400).json({
+            success: false,
+            message: "Choose a valid item and quantity to return",
+          });
+        }
+        returnItems.push({
+          variantId: line.variantId,
+          quantity,
+          action: requested.action === "replace" ? "replace" : "refund",
+          productName: line.productName,
+        });
+      }
+    }
+
     await Order.findByIdAndUpdate(id, {
       returnRequest: {
         status: "pending",
         reason: note,
         requestedAt: new Date(),
+        items: returnItems,
         refundAmount: 0,
         refundedTo: "none",
       },
@@ -1154,6 +1207,132 @@ router.post("/:id/return", async (req, res) => {
   } catch (error) {
     console.error("Return request error:", error);
     res.status(500).json({ success: false, message: "Failed to request return" });
+  }
+});
+
+router.post("/:id/reorder", async (req, res) => {
+  try {
+    const { userId } = req.body || {};
+    if (!mongoose.Types.ObjectId.isValid(req.params.id) || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Order and user are required" });
+    }
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    if (String(order.user) !== String(userId)) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+
+    let cart = await Cart.findOne({ user: userId, status: "active" });
+    if (!cart) cart = new Cart({ user: userId, items: [], status: "active" });
+
+    const skipped = [];
+    for (const item of order.items) {
+      const product = await Product.findById(item.product);
+      const variant = product?.variants?.find((v) => String(v._id) === String(item.variantId));
+      if (!product?.isActive || !variant?.isActive) {
+        skipped.push(item.productName);
+        continue;
+      }
+      if (variant.expiresAt && new Date(variant.expiresAt) < new Date()) {
+        skipped.push(item.productName);
+        continue;
+      }
+      if (variant.stock < 1) {
+        skipped.push(item.productName);
+        continue;
+      }
+      const quantity = Math.min(item.quantity, variant.stock);
+      const existing = cart.items.find(
+        (row) =>
+          String(row.product) === String(item.product) &&
+          String(row.variantId) === String(item.variantId),
+      );
+      if (existing) {
+        existing.quantity = Math.min(variant.stock, existing.quantity + quantity);
+        existing.unitPrice = variant.price;
+        existing.subtotal = Math.round(existing.unitPrice * existing.quantity * 100) / 100;
+      } else {
+        cart.items.push({
+          product: product._id,
+          variantId: variant._id,
+          productName: product.name,
+          image: variant.image || product.image,
+          packSize: variant.packSize,
+          packUnit: variant.packUnit,
+          unitPrice: variant.price,
+          mrp: variant.mrp,
+          discount: product.discount || 0,
+          tax: product.tax || { gstPercent: 0, inclusive: true },
+          quantity,
+          subtotal: Math.round(variant.price * quantity * 100) / 100,
+          seller: {
+            sellerId: product.seller.sellerId,
+            sellerName: product.seller.sellerName,
+          },
+          isActive: true,
+        });
+      }
+    }
+    if (!cart.items.length) {
+      return res.status(400).json({
+        success: false,
+        message: "None of these items are available to buy again",
+      });
+    }
+    const totals = cart.items.reduce(
+      (sum, row) => {
+        sum.totalItems += 1;
+        sum.totalQuantity += row.quantity;
+        sum.subtotal += row.unitPrice * row.quantity;
+        return sum;
+      },
+      { totalItems: 0, totalQuantity: 0, subtotal: 0 },
+    );
+    cart.totalItems = totals.totalItems;
+    cart.totalQuantity = totals.totalQuantity;
+    cart.subtotal = Math.round(totals.subtotal * 100) / 100;
+    cart.grandTotal = cart.subtotal;
+    cart.lastValidatedAt = new Date();
+    await cart.save();
+    res.json({
+      success: true,
+      message: skipped.length
+        ? `Added available items. Unavailable: ${skipped.join(", ")}`
+        : "Items added to your cart",
+      skipped,
+    });
+  } catch (error) {
+    console.error("Reorder error:", error);
+    res.status(500).json({ success: false, message: "Could not add these items again" });
+  }
+});
+
+router.post("/:id/repeat", async (req, res) => {
+  try {
+    const { userId } = req.body || {};
+    if (!mongoose.Types.ObjectId.isValid(req.params.id) || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Order and user are required" });
+    }
+    const order = await Order.findById(req.params.id).select("user status orderNumber");
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    if (String(order.user) !== String(userId)) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+    if (order.status !== "delivered") {
+      return res.status(400).json({ success: false, message: "Weekly reminders start after delivery" });
+    }
+    const nextAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    await RepeatReminder.findOneAndUpdate(
+      { user: userId, order: order._id },
+      { cadence: "weekly", nextAt, active: true },
+      { upsert: true, new: true },
+    );
+    res.json({
+      success: true,
+      message: "We will remind you every week to buy this order again",
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Could not save the reminder" });
   }
 });
 
@@ -1199,12 +1378,16 @@ router.post("/:id/verify-payment", async (req, res) => {
     order.payment.paidAt = new Date();
 
     // Update order status to confirmed
-    if (order.status === "placed") {
+    const becameConfirmed = order.status === "placed";
+    if (becameConfirmed) {
       order.status = "confirmed";
     }
 
     await order.save();
     await settlePaidOrder(order._id);
+    if (becameConfirmed) {
+      await notifyOrderStatus(order, "confirmed");
+    }
 
     // Update payment record
     await Payment.findOneAndUpdate(

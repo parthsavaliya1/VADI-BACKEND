@@ -22,6 +22,11 @@ const DriverSchema = new mongoose.Schema(
     otpSessionId: { type: String, default: null },
     otpExpiresAt: { type: Date, default: null },
     otpAttempts: { type: Number, default: 0 },
+    lastLocation: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      updatedAt: { type: Date, default: null },
+    },
   },
   { timestamps: true },
 );

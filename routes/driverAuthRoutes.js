@@ -204,4 +204,28 @@ router.get("/deliveries", driverOnlyMiddleware, async (req, res) => {
   }
 });
 
+router.post("/location", driverOnlyMiddleware, async (req, res) => {
+  try {
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ success: false, message: "Location is required" });
+    }
+    const updatedAt = new Date();
+    await Driver.findByIdAndUpdate(req.driver.id, {
+      lastLocation: { lat, lng, updatedAt },
+    });
+    await Order.updateMany(
+      {
+        assignedDriver: req.driver.id,
+        status: { $in: ["shipped", "out_for_delivery"] },
+      },
+      { driverLocation: { lat, lng, updatedAt } },
+    );
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to save location" });
+  }
+});
+
 module.exports = router;

@@ -166,6 +166,12 @@ const ProductSchema = new mongoose.Schema(
           type: String,
           default: "",
         },
+
+        /** Optional. When set and in the past, the pack cannot be added to a cart. */
+        expiresAt: {
+          type: Date,
+          default: null,
+        },
       },
     ],
 

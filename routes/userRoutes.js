@@ -7,11 +7,12 @@ const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
 const Review = require("../models/Review");
 const Seller = require("../models/Seller");
+const { ensureReferralCode } = require("../utils/referralReward");
 
 const router = express.Router();
 
 /** Fields the mobile app may PATCH (matches AuthContext). */
-const ALLOWED_PATCH_FIELDS = ["name", "dob", "profileImage", "lastLoginAt"];
+const ALLOWED_PATCH_FIELDS = ["name", "dob", "profileImage", "lastLoginAt", "preferredLanguage"];
 
 /**
  * PATCH /api/users/:id
@@ -47,6 +48,21 @@ router.patch("/:id", async (req, res) => {
   } catch (error) {
     console.error("PATCH /api/users/:id error:", error?.message || error);
     return res.status(500).json({ message: "Failed to update user" });
+  }
+});
+
+/**
+ * POST /api/users/:id/referral
+ * Returns the customer's share code, creating one if they signed up before referrals existed.
+ */
+router.post("/:id/referral", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    const referralCode = await ensureReferralCode(user);
+    return res.json({ referralCode });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to load referral code" });
   }
 });
 

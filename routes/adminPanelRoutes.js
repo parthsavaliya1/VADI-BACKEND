@@ -16,6 +16,10 @@ const {
 const { readFeeSettings, DRIVER_FEE_MODES } = require("../utils/deliveryQuote");
 const { creditWallet } = require("../utils/wallet");
 const { reverseOrderCommission } = require("../utils/commission");
+const { refundRazorpayPayment } = require("../utils/razorpayRefund");
+const { notifyOrderStatus } = require("../utils/orderNotify");
+const SellerPayout = require("../models/SellerPayout");
+const SupportMessage = require("../models/SupportMessage");
 
 const productRoutes = require("./productRoutes");
 const categoryRoutes = require("./categoryRoutes");
@@ -755,8 +759,34 @@ router.put("/returns/:id", async (req, res) => {
     }
 
     const note = String(adminNote || "").trim();
-    const paidOnline =
-      order.payment?.status === "paid" && order.payment?.method !== "cod";
+    const requested = Array.isArray(order.returnRequest.items) ? order.returnRequest.items : [];
+    const stockLines = [];
+    let refundAmount = 0;
+    if (requested.length) {
+      for (const requestedItem of requested) {
+        const line = order.items.find(
+          (item) => String(item.variantId) === String(requestedItem.variantId),
+        );
+        if (!line) continue;
+        const quantity = Math.min(line.quantity, Number(requestedItem.quantity) || line.quantity);
+        stockLines.push({ product: line.product, variantId: line.variantId, quantity });
+        if (requestedItem.action !== "replace") {
+          refundAmount += (Number(line.subtotal) / line.quantity) * quantity;
+        }
+      }
+    } else {
+      refundAmount = order.grandTotal;
+      for (const line of order.items) {
+        stockLines.push({ product: line.product, variantId: line.variantId, quantity: line.quantity });
+      }
+    }
+    refundAmount = Math.min(order.grandTotal, Number(refundAmount.toFixed(2)));
+    const fullReturn =
+      !requested.length ||
+      (refundAmount >= order.grandTotal &&
+        stockLines.reduce((sum, line) => sum + line.quantity, 0) >=
+          order.items.reduce((sum, line) => sum + line.quantity, 0));
+
     const patch = {
       "returnRequest.adminNote": note,
       "returnRequest.resolvedAt": new Date(),
@@ -766,28 +796,48 @@ router.put("/returns/:id", async (req, res) => {
       patch["returnRequest.status"] = "rejected";
       await Order.updateOne({ _id: order._id }, { $set: patch }, { session });
       await session.commitTransaction();
+      await notifyOrderStatus(order, "returned");
       return res.json({ success: true, message: "Return rejected" });
     }
 
-    if (paidOnline) {
+    const paymentDoc = await Payment.findOne({ order: order._id }).session(session);
+    const razorpayPaymentId = order.payment?.transactionId || paymentDoc?.gateway?.paymentId;
+    const canRefund = refundAmount > 0 && order.payment?.status === "paid";
+    let refundedTo = "none";
+    let gatewayRefundId = null;
+    if (canRefund && ["upi", "card", "wallet"].includes(order.payment.method) && razorpayPaymentId) {
+      try {
+        gatewayRefundId = await refundRazorpayPayment(razorpayPaymentId, refundAmount);
+      } catch (error) {
+        console.error("Razorpay refund failed, using wallet:", error.message);
+      }
+    }
+    if (canRefund && gatewayRefundId) {
+      refundedTo = "original";
+    } else if (canRefund) {
       await creditWallet({
         userId: order.user,
-        amount: order.grandTotal,
+        amount: refundAmount,
         reason: "refund",
         orderId: order._id,
         session,
       });
-      patch["payment.status"] = "refunded";
-      patch["returnRequest.refundAmount"] = order.grandTotal;
-      patch["returnRequest.refundedTo"] = "wallet";
+      refundedTo = "wallet";
+    }
+
+    if (refundedTo !== "none") {
+      if (fullReturn) patch["payment.status"] = "refunded";
+      patch["returnRequest.refundAmount"] = refundAmount;
+      patch["returnRequest.refundedTo"] = refundedTo;
       await Payment.findOneAndUpdate(
         { order: order._id },
         {
-          status: "refunded",
+          status: fullReturn ? "refunded" : paymentDoc?.status || "success",
           refund: {
-            amount: order.grandTotal,
+            amount: refundAmount,
             reason: order.returnRequest.reason,
             refundedAt: new Date(),
+            gatewayRefundId,
           },
         },
         { session },
@@ -797,9 +847,9 @@ router.put("/returns/:id", async (req, res) => {
     }
 
     patch["returnRequest.status"] = "approved";
-    patch.status = "returned";
+    if (fullReturn) patch.status = "returned";
     await Order.updateOne({ _id: order._id }, { $set: patch }, { session });
-    for (const item of order.items) {
+    for (const item of stockLines) {
       await Product.updateOne(
         { _id: item.product, "variants._id": item.variantId },
         { $inc: { "variants.$.stock": item.quantity } },
@@ -807,12 +857,16 @@ router.put("/returns/:id", async (req, res) => {
       );
     }
     await session.commitTransaction();
-    if (paidOnline) await reverseOrderCommission(order._id);
+    if (fullReturn && order.payment?.status === "paid") await reverseOrderCommission(order._id);
+    await notifyOrderStatus(order, "returned");
     res.json({
       success: true,
-      message: paidOnline
-        ? "Return approved and refunded to the customer wallet"
-        : "Return approved",
+      message:
+        refundedTo === "original"
+          ? "Return approved and refunded to the original payment"
+          : refundedTo === "wallet"
+            ? "Return approved and refunded to the customer wallet"
+            : "Return approved",
       data: order,
     });
   } catch (error) {
@@ -824,6 +878,76 @@ router.put("/returns/:id", async (req, res) => {
     });
   } finally {
     session.endSession();
+  }
+});
+
+router.get("/payouts", async (req, res) => {
+  try {
+    const data = await SellerPayout.find()
+      .populate("seller", "name phone bank")
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load payouts" });
+  }
+});
+
+router.put("/payouts/:id", async (req, res) => {
+  try {
+    const payout = await SellerPayout.findById(req.params.id);
+    if (!payout || payout.status !== "pending") {
+      return res.status(404).json({ success: false, message: "Pending payout not found" });
+    }
+    const action = req.body?.action;
+    if (!["paid", "rejected"].includes(action)) {
+      return res.status(400).json({ success: false, message: "Action must be paid or rejected" });
+    }
+    payout.status = action;
+    payout.note = String(req.body?.note || "").trim();
+    payout.paidAt = action === "paid" ? new Date() : null;
+    await payout.save();
+    res.json({ success: true, message: action === "paid" ? "Marked as paid" : "Payout rejected" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to update payout" });
+  }
+});
+
+router.get("/support", async (req, res) => {
+  try {
+    const data = await SupportMessage.find()
+      .populate("user", "name phone")
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load support messages" });
+  }
+});
+
+router.post("/support/:userId", async (req, res) => {
+  try {
+    const text = String(req.body?.body || "").trim();
+    if (!mongoose.Types.ObjectId.isValid(req.params.userId) || text.length < 2) {
+      return res.status(400).json({ success: false, message: "Write a reply" });
+    }
+    const message = await SupportMessage.create({
+      user: req.params.userId,
+      body: text.slice(0, 1000),
+      from: "admin",
+    });
+    const { notifyUser } = require("../utils/orderNotify");
+    await notifyUser({
+      userId: req.params.userId,
+      title: "Support replied",
+      body: text.slice(0, 140),
+      kind: "support",
+    });
+    res.status(201).json({ success: true, data: message });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to reply" });
   }
 });
 
