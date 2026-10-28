@@ -4,7 +4,7 @@ const path = require("path");
 require("dotenv").config();
 
 const connectDB = require("./config/db");
-connectDB();
+const ensureAdmin = require("./utils/ensureAdmin");
 
 const productRoutes = require("./routes/productRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
@@ -106,7 +106,10 @@ app.get("/", (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 const razorpayKey = process.env.RAZORPAY_KEY_ID || "";
-app.listen(PORT, () => {
+async function start() {
+  await connectDB();
+  await ensureAdmin();
+  app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(
     razorpayKey
@@ -117,4 +120,10 @@ app.listen(PORT, () => {
   setInterval(() => {
     runDueReminders().catch((error) => console.error("Repeat reminder error:", error.message));
   }, 15 * 60 * 1000);
+});
+}
+
+start().catch((error) => {
+  console.error('Backend startup failed:', error.message);
+  process.exit(1);
 });
