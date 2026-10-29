@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 
 const UserSchema = new mongoose.Schema(
   {
+    isDemo: { type: Boolean, default: false },
+    reviewPasswordHash: { type: String, select: false },
     name: {
       type: String,
       trim: true,
@@ -88,6 +90,10 @@ const UserSchema = new mongoose.Schema(
       default: [],
     },
 
+    deletedNotificationIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Notification" }],
+      default: [],
+    },
     privacyPolicyAccepted: {
       type: Boolean,
       default: false,

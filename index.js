@@ -65,28 +65,33 @@ app.use(appConfigRoutes);
 // 🔥 serve uploads FIRST
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-app.use("/api/uploads", uploadRoutes);
-app.use("/products", productRoutes);
-app.use("/categories", categoryRoutes);
+const mobileAccess = require('./middleware/mobileAccess');
+const { adminOnly } = require('./middleware/sessionAuth');
+const publicReadAdminWrite = (req, res, next) => ['GET','HEAD','OPTIONS'].includes(req.method) ? next() : adminOnly(req, res, next);
+app.use(require('./routes/publicPolicyRoutes'));
+app.use('/api/auth', require('./routes/reviewAuthRoutes'));
+app.use('/api/uploads', mobileAccess('uploads'), uploadRoutes);
+app.use("/products", mobileAccess('products'), productRoutes);
+app.use("/categories", publicReadAdminWrite, categoryRoutes);
 app.use("/banners", bannerRoutes);
 app.use("/api/auth", authRoutes);
-app.use("/api/users", userRoutes);
-app.use("/addresses", addressRoute);
-app.use("/orders", orderRoute);
-app.use("/payments", paymentRoute);
-app.use("/wallet", walletRoutes);
-app.use("/cart", cartRoute);
+app.use("/api/users", mobileAccess('users'), userRoutes);
+app.use("/addresses", mobileAccess('addresses'), addressRoute);
+app.use("/orders", mobileAccess('orders'), orderRoute);
+app.use("/payments", mobileAccess('payments'), paymentRoute);
+app.use("/wallet", mobileAccess('wallet'), walletRoutes);
+app.use("/cart", mobileAccess('cart'), cartRoute);
 app.use("/fees", feeRoutes);
 app.use("/coupons", couponRoutes);
-app.use("/wishlist", wishlistRoutes);
-app.use("/support", supportRoutes);
-app.use("/reviews", reviewRoute);
-app.use("/sellers", sellerRoutes);
+app.use("/wishlist", mobileAccess('wishlist'), wishlistRoutes);
+app.use("/support", mobileAccess('support'), supportRoutes);
+app.use("/reviews", mobileAccess('reviews'), reviewRoute);
+app.use("/sellers", mobileAccess('sellers'), sellerRoutes);
 app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin", adminPanelRoutes);
-app.use("/deal-settings", dealSettingsRoutes);
-app.use("/home-section-settings", homeSectionSettingsRoutes);
+app.use("/deal-settings", publicReadAdminWrite, dealSettingsRoutes);
+app.use("/home-section-settings", publicReadAdminWrite, homeSectionSettingsRoutes);
 // Public colour theme — read-only from any origin (website, app). Changes go through /api/admin/app-theme.
 app.use(
   "/app-theme",
@@ -97,7 +102,7 @@ app.use(
       : res.status(405).json({ success: false, message: "Method not allowed" }),
   appThemeRoutes
 );
-app.use("/notifications", notificationRoutes);
+app.use("/notifications", mobileAccess('notifications'), notificationRoutes);
 app.use("/api/driver", driverAuthRoutes);
 
 app.get("/", (req, res) => {

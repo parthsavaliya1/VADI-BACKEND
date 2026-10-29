@@ -162,11 +162,6 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // If this address is set as default, unset other default addresses
-    if (isDefault) {
-      await Address.updateMany({ user }, { $set: { isDefault: false } });
-    }
-
     // If this is the first address, make it default automatically
     const isFirstAddress = count === 0;
 
@@ -197,6 +192,11 @@ router.post("/", async (req, res) => {
     const deliveryErr = assertDeliverableRajkotAddress(addressData);
     if (deliveryErr) {
       return res.status(400).json({ error: deliveryErr });
+    }
+
+    // If this address is set as default, unset other default addresses
+    if (isDefault) {
+      await Address.updateMany({ user }, { $set: { isDefault: false } });
     }
 
     const address = await Address.create(addressData);
@@ -240,14 +240,6 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    // If setting this as default, unset other defaults
-    if (isDefault && !address.isDefault) {
-      await Address.updateMany(
-        { user: address.user, _id: { $ne: req.params.id } },
-        { $set: { isDefault: false } },
-      );
-    }
-
     // Update address fields
     if (type) address.type = type;
     if (name !== undefined) address.name = name ? name.trim() : name;
@@ -289,6 +281,9 @@ router.put("/:id", async (req, res) => {
       return res.status(400).json({ error: deliveryErr });
     }
 
+    if (isDefault) {
+      await Address.updateMany({ user: address.user, _id: { $ne: req.params.id } }, { $set: { isDefault: false } });
+    }
     await address.save();
 
     res.json(address);
@@ -308,6 +303,9 @@ router.put("/:id/default", async (req, res) => {
     if (!address) {
       return res.status(404).json({ error: "Address not found" });
     }
+
+    const deliveryError = assertDeliverableRajkotAddress(address);
+    if (deliveryError) return res.status(400).json({ error: deliveryError });
 
     // Unset all other default addresses for this user
     await Address.updateMany(

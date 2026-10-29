@@ -38,7 +38,7 @@ function isGujaratState(value) {
     .toLowerCase()
     .replace(/\s+/g, " ");
   if (!t.length) return false;
-  return t.includes("gujarat") || t === "gj" || t.endsWith(", gj");
+  return t === "gujarat" || t === "gj" || t === "ગુજરાત";
 }
 
 /** @returns {boolean} */

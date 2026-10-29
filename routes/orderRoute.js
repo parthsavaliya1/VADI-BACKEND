@@ -1,3 +1,4 @@
+const verifyCapturedPayment = require('../utils/verifyCapturedPayment');
 const express = require("express");
 const router = express.Router();
 const Order = require("../models/Orders"); // Adjust path as needed
@@ -6,6 +7,8 @@ const { debitWallet, creditWallet } = require("../utils/wallet"); // Adjust path
 const Cart = require("../models/Cart"); // Adjust path as needed
 const Product = require("../models/Product"); // Adjust path as needed
 const User = require("../models/User");
+const Address = require("../models/Address");
+const { assertDeliverableRajkotAddress } = require("../utils/deliveryZone");
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 const {
@@ -188,7 +191,6 @@ router.post("/", async (req, res) => {
     const {
       userId,
       addressId,
-      addressSnapshot,
       paymentMethod,
       paymentDetails,
       deliverySlot,
@@ -202,6 +204,21 @@ router.post("/", async (req, res) => {
         success: false,
         message: "User ID, Address ID, and Payment Method are required",
       });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(addressId) || !mongoose.Types.ObjectId.isValid(userId)) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: "Invalid user or address ID" });
+    }
+    const deliveryAddress = await Address.findOne({ _id: addressId, user: userId }).session(session);
+    if (!deliveryAddress) {
+      await session.abortTransaction();
+      return res.status(404).json({ success: false, message: "Delivery address not found" });
+    }
+    const deliveryError = assertDeliverableRajkotAddress(deliveryAddress);
+    if (deliveryError) {
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: deliveryError });
     }
 
     if (!["cod", "upi", "card", "wallet", "balance"].includes(paymentMethod)) {
@@ -300,6 +317,9 @@ router.post("/", async (req, res) => {
     const quoted = await quoteOrderFees(merchandise);
     const quotedDeliveryFee = quoted.deliveryFee;
     const grandTotal = Math.round((merchandise + quotedDeliveryFee) * 100) / 100;
+    if (paymentMethod !== 'cod' && paymentMethod !== 'balance') {
+      await verifyCapturedPayment({ orderId: paymentDetails.razorpayOrderId, paymentId: paymentDetails.razorpayPaymentId, signature: paymentDetails.razorpaySignature, userId, amountInPaise: Math.round(grandTotal * 100) });
+    }
     const quotedSlot =
       deliverySlot?.date && deliverySlot?.slot
         ? deliverySlot
@@ -333,7 +353,7 @@ router.post("/", async (req, res) => {
       },
       address: {
         addressId,
-        snapshot: normalizeAddressSnapshot(addressSnapshot),
+        snapshot: normalizeAddressSnapshot(deliveryAddress.toObject()),
       },
       deliverySlot: quotedSlot,
       status: paymentMethod === "cod" ? "placed" : "confirmed",

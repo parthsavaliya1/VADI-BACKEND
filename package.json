@@ -7,7 +7,10 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "migrate:sellers": "node scripts/migrateProductSellers.js",
-    "create:driver": "node scripts/createDriver.js"
+    "create:driver": "node scripts/createDriver.js",
+    "create:review-accounts": "node scripts/createReviewAccounts.js",
+    "test:release": "node --test tests/*.test.js",
+    "verify:review-accounts": "node scripts/verifyReviewAccounts.js"
   },
   "keywords": [],
   "author": "",
@@ -19,7 +22,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "firebase-admin": "^13.6.0",
+    "firebase-admin": "^14.5.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.1.5",
     "multer": "^2.0.2",
@@ -28,5 +31,8 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.11"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

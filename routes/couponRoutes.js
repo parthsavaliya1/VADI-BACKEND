@@ -99,7 +99,7 @@ function normalizeCouponBody(body, { partial = false } = {}) {
   return payload;
 }
 
-publicRouter.post("/preview", async (req, res) => {
+publicRouter.post("/preview", require("../middleware/mobileAccess")("coupons"), async (req, res) => {
   try {
     const { userId, code } = req.body;
     if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {

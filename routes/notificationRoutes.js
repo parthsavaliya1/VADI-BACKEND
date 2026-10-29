@@ -27,7 +27,7 @@ router.get("/", async (req, res) => {
     }
 
     const user = await User.findById(userId)
-      .select("readBroadcastNotificationIds")
+      .select("readBroadcastNotificationIds deletedNotificationIds")
       .lean();
 
     if (!user) {
@@ -44,6 +44,7 @@ router.get("/", async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
 
     const items = await Notification.find({
+      _id: { $nin: user.deletedNotificationIds || [] },
       $or: [
         { user: userId },
         { kind: "broadcast" },
@@ -132,4 +133,26 @@ router.post("/:notificationId/read", async (req, res) => {
   }
 });
 
+// Remove notifications only from this user's inbox; keep shared broadcasts.
+router.post("/delete-bulk", async (req, res) => {
+  try {
+    const userId = normalizeObjectId(req.body?.userId);
+    const ids = req.body?.ids;
+    if (!userId || !Array.isArray(ids) || !ids.length || ids.length > 100 || ids.some((id) => !normalizeObjectId(id))) {
+      return res.status(400).json({ success: false, message: "userId and 1–100 valid notification IDs are required" });
+    }
+    const user = await User.findById(userId).select("_id").lean();
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    const notes = await Notification.find({
+      _id: { $in: [...new Set(ids.map(normalizeObjectId))] },
+      $or: [{ user: userId }, { kind: "broadcast" }, { user: null }, { user: { $exists: false } }],
+    }).select("_id").lean();
+    const deletedIds = notes.map((note) => String(note._id));
+    if (deletedIds.length) await User.updateOne({ _id: userId }, { $addToSet: { deletedNotificationIds: { $each: deletedIds } } });
+    return res.json({ success: true, removed: deletedIds.length, deletedIds });
+  } catch (error) {
+    console.error("Delete notifications failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete notifications" });
+  }
+});
 module.exports = router;

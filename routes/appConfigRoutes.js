@@ -1,5 +1,5 @@
 const express = require("express");
-const admin = require("firebase-admin");
+const { getRemoteConfig } = require("firebase-admin/remote-config");
 const { ensureFirebaseApp } = require("../config/firebaseAdmin");
 
 const router = express.Router();
@@ -20,7 +20,7 @@ function pickStringFromDefaultValue(dv) {
 
 /**
  * Reads string from Remote Config parameter (default or first conditional value).
- * @param {import("firebase-admin").remoteConfig.RemoteConfigTemplate} template
+ * @param {import("firebase-admin/remote-config").RemoteConfigTemplate} template
  * @param {string} key
  */
 function getStringFromTemplate(template, key) {
@@ -46,8 +46,7 @@ function getStringFromTemplate(template, key) {
  */
 router.get("/app-config", async (req, res) => {
   try {
-    ensureFirebaseApp();
-    const rc = admin.remoteConfig();
+    const rc = getRemoteConfig(ensureFirebaseApp());
     const template = await rc.getTemplate();
     const apiBaseUrl = getStringFromTemplate(template, RC_API_BASE_URL_KEY);
 

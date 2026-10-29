@@ -9,6 +9,11 @@ const Review = require("../models/Review");
 const Seller = require("../models/Seller");
 const { ensureReferralCode } = require("../utils/referralReward");
 
+const Wishlist = require('../models/Wishlist');
+const SupportMessage = require('../models/SupportMessage');
+const Notification = require('../models/Notification');
+const Product = require('../models/Product');
+const { publicUser } = require('../middleware/sessionAuth');
 const router = express.Router();
 
 /** Fields the mobile app may PATCH (matches AuthContext). */
@@ -44,7 +49,7 @@ router.patch("/:id", async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    return res.json(user);
+    return res.json(publicUser(user));
   } catch (error) {
     console.error("PATCH /api/users/:id error:", error?.message || error);
     return res.status(500).json({ message: "Failed to update user" });
@@ -82,7 +87,7 @@ router.delete("/:id", async (req, res) => {
       return res.status(400).json({ message: "Invalid user id" });
     }
 
-    const user = await User.findById(id).select("_id role").lean();
+    const user = await User.findById(id).select("_id role isDemo").lean();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -92,16 +97,19 @@ router.delete("/:id", async (req, res) => {
         .json({ message: "Admin accounts cannot be deleted from the app" });
     }
 
-    await Promise.all([
-      Address.deleteMany({ user: id }),
-      Cart.deleteMany({ user: id }),
-      WalletTransaction.deleteMany({ user: id }),
-      Wallet.deleteMany({ user: id }),
-      Review.deleteMany({ user: id }),
-      Seller.deleteMany({ user: id }),
-    ]);
-
-    await User.findByIdAndDelete(id);
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        // Transactions prevent a failed cleanup from leaving a half-deleted account.
+        const shop = await Seller.findOne({ user: id }).session(session);
+        if (shop) await Product.updateMany({ 'seller.sellerId': shop._id }, { $set: { isActive: false, 'seller.sellerName': 'Deleted seller' }, $unset: { 'seller.contact': '', 'seller.location': '' } }, { session });
+        for (const Model of [Address, Cart, WalletTransaction, Wallet, Review, Wishlist, SupportMessage, Notification, Seller]) {
+          await Model.deleteMany({ user: id }).session(session);
+        }
+        if (user.isDemo) await require('../models/ReviewSandbox').deleteOne({ _id: 'play-review-v1' }).session(session);
+        await User.findByIdAndDelete(id).session(session);
+      });
+    } finally { await session.endSession(); }
 
     return res.json({ success: true, message: "Account deleted" });
   } catch (error) {

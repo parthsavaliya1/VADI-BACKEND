@@ -8,50 +8,26 @@ const {
 } = require("../utils/twoFactorSms");
 const { attachReferrer, ensureReferralCode } = require("../utils/referralReward");
 
+const { authenticate, customerToken, publicUser } = require('../middleware/sessionAuth');
 const router = express.Router();
+const authAttempts = new Map();
+router.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  if (!['/send-otp', '/verify-otp', '/signup'].includes(req.path)) return next();
+  const now = Date.now();
+  for (const [key, val] of authAttempts) if (val.until < now) authAttempts.delete(key);
+  const key = req.ip;
+  const entry = authAttempts.get(key) || { count: 0, until: now + 15 * 60 * 1000 };
+  entry.count += 1; authAttempts.set(key, entry);
+  if (entry.count > 30) return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+  return next();
+});
 
 /* ────────────────────────────────────────────
    CONFIG
 ──────────────────────────────────────────── */
 
 const ADMIN_PHONE = "+919909049699";
-
-// Official numbers — skip SMS and use fixed OTP for login
-const DEFAULT_OTP_PHONES = ["9909049699", "9662089386"];
-const DEFAULT_OTP = "111298";
-
-// Dummy / test account — bypasses real OTP
-// Set DUMMY_PHONE and DUMMY_OTP in your .env to override defaults
-const DUMMY_PHONE = process.env.DUMMY_PHONE || "+919999999999";
-const DUMMY_OTP   = process.env.DUMMY_OTP   || "123456";
-
-// Demo/review account — can login without OTP (for Play Store review)
-// Set DEMO_PHONE in your .env to override defaults
-const DEMO_PHONE = process.env.DEMO_PHONE || DUMMY_PHONE;
-
-/* ────────────────────────────────────────────
-   HELPERS
-──────────────────────────────────────────── */
-
-/**
- * Returns true for the dummy/test account.
- */
-function isDummyPhone(phone) {
-  return normalizePhone(phone) === normalizePhone(DUMMY_PHONE);
-}
-
-function isDefaultOtpPhone(phone) {
-  const digits = normalizePhone(phone).replace(/\D/g, "").slice(-10);
-  return DEFAULT_OTP_PHONES.includes(digits);
-}
-
-function isDemoPhone(phone) {
-  return normalizePhone(phone) === normalizePhone(DEMO_PHONE);
-}
-
-/* ────────────────────────────────────────────
-   ROUTES
-──────────────────────────────────────────── */
 
 /**
  * POST /api/auth/send-otp
@@ -70,6 +46,7 @@ router.post("/send-otp", async (req, res) => {
     }
 
     const normalizedPhone = normalizePhone(phone);
+    if (!/^\+91[6-9]\d{9}$/.test(normalizedPhone)) return res.status(400).json({ error: "Enter a valid Indian mobile number" });
 
     if (!phone) {
       return res.status(400).json({ error: "Phone is required" });
@@ -95,39 +72,7 @@ router.post("/send-otp", async (req, res) => {
       user = await User.create({ phone: normalizedPhone });
     }
 
-    // ── Dummy account: skip real OTP ──────────────────────────────────
-    if (isDummyPhone(normalizedPhone)) {
-      user.otp            = DUMMY_OTP;
-      user.otpSessionId   = null;
-      user.otpExpiresAt   = new Date(Date.now() + 10 * 60 * 1000); // 10 min
-      await user.save();
-
-      console.log(`[DEV] Dummy OTP for ${normalizedPhone}: ${DUMMY_OTP}`);
-
-      return res.json({
-        success: true,
-        message: "OTP sent (dummy account)",
-        // expose in dev/test so the frontend can auto-fill if needed
-        ...(process.env.NODE_ENV !== "production" && { devOtp: DUMMY_OTP }),
-      });
-    }
-
-    // ── Official numbers: skip SMS, use fixed default OTP ─────────────
-    if (isDefaultOtpPhone(normalizedPhone)) {
-      user.otp            = DEFAULT_OTP;
-      user.otpSessionId   = null;
-      user.otpExpiresAt   = new Date(Date.now() + 10 * 60 * 1000); // 10 min
-      await user.save();
-
-      console.log(`[DEV] Default OTP for ${normalizedPhone}: ${DEFAULT_OTP}`);
-
-      return res.json({
-        success: true,
-        message: "OTP sent (default account)",
-        ...(process.env.NODE_ENV !== "production" && { devOtp: DEFAULT_OTP }),
-      });
-    }
-
+    if (user.isDemo || user.status === 'blocked') return res.status(403).json({ error: 'Use assigned test credentials, or contact support for account access' });
     const bypassCooldown =
       forceResend === true ||
       forceResend === "true";
@@ -157,6 +102,7 @@ router.post("/send-otp", async (req, res) => {
       user.otpSessionId = null;
     }
 
+    user.otpAttempts = 0;
     user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min
     await user.save();
 
@@ -203,6 +149,8 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ error: "OTP expired" });
     }
 
+    if (user.isDemo || user.status === 'blocked') return res.status(403).json({ error: 'Account unavailable for OTP sign-in' });
+    if ((user.otpAttempts || 0) >= 5) return res.status(429).json({ error: 'Too many incorrect codes. Request a new OTP after expiry.' });
     let isValid = false;
     if (user.otpSessionId) {
       isValid = await verify2factorSession(user.otpSessionId, otp);
@@ -239,7 +187,8 @@ router.post("/verify-otp", async (req, res) => {
     return res.json({
       success: true,
       phone: normalizedPhone,
-      user,
+      user: publicUser(user),
+      token: customerToken(user),
       isNewUser,
     });
   } catch (err) {
@@ -248,56 +197,12 @@ router.post("/verify-otp", async (req, res) => {
   }
 });
 
-/**
- * POST /api/auth/demo-login
- * Body: { phone }
- *
- * For Play Store review: allow a single demo number to login without OTP.
- */
-router.post("/demo-login", async (req, res) => {
-  try {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: "Phone is required" });
-
-    const normalizedPhone = normalizePhone(phone);
-    if (!isDemoPhone(normalizedPhone)) {
-      return res.status(403).json({ error: "Demo login not allowed for this number" });
-    }
-
-    let user = await User.findOne({ phone: normalizedPhone });
-    if (!user) {
-      user = await User.create({
-        phone: normalizedPhone,
-        name: "Demo User",
-        role: "user",
-        isPhoneVerified: true,
-        otp: null,
-        otpExpiresAt: null,
-        otpVerifiedAt: new Date(),
-        lastLoginAt: new Date(),
-      });
-    } else {
-      user.isPhoneVerified = true;
-      if (!user.name) user.name = "Demo User";
-      user.otp = null;
-      user.otpExpiresAt = null;
-      user.otpVerifiedAt = new Date();
-      user.lastLoginAt = new Date();
-      await user.save();
-    }
-
-    return res.json({ success: true, user });
-  } catch (err) {
-    console.error("demo-login error:", err);
-    return res.status(500).json({ error: "Demo login failed" });
-  }
-});
-
+// Removed phone-only demo bypass; dedicated credentials are handled by reviewAuthRoutes.
 /**
  * POST /api/auth/signup
  * Body: { name, phone, profileImage?, role? }
  */
-router.post("/signup", async (req, res) => {
+router.post("/signup", authenticate, async (req, res) => {
   try {
     const { name, phone, profileImage, role, privacyPolicyAccepted, referralCode } = req.body;
 
@@ -311,6 +216,8 @@ router.post("/signup", async (req, res) => {
     if (!user) {
       return res.status(400).json({ error: "OTP not verified" });
     }
+
+    if (req.auth.role !== "customer" || req.auth.id !== String(user._id)) return res.status(403).json({ error: "Verify your own phone before signup" });
 
     if (!user.isPhoneVerified) {
       return res.status(400).json({ error: "Phone not verified" });
@@ -343,7 +250,7 @@ router.post("/signup", async (req, res) => {
     await attachReferrer(user, referralCode);
     await ensureReferralCode(user);
 
-    return res.status(201).json(user);
+    return res.status(201).json({ ...publicUser(user), token: customerToken(user) });
   } catch (err) {
     console.error("signup error:", err);
     return res.status(500).json({ error: "Server error" });
@@ -354,9 +261,10 @@ router.post("/signup", async (req, res) => {
  * POST /api/auth/push-token
  * Body: { userId, pushToken, platform? }
  */
-router.post("/push-token", async (req, res) => {
+router.post("/push-token", authenticate, async (req, res) => {
   try {
     const { userId, pushToken, platform = "unknown" } = req.body;
+    if (req.auth.role !== "customer" || String(userId) !== req.auth.id) return res.status(403).json({ error: "Account access denied" });
 
     if (!userId || !pushToken) {
       return res.status(400).json({ error: "userId and pushToken are required" });

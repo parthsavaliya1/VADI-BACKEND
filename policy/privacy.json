@@ -1,0 +1,54 @@
+{
+  "updated": "29 October 2026",
+  "intro": "VADI Fresh operates the VADI farm-to-home grocery app. This policy explains how the app and its supporting services handle account, delivery, shopping and optional device-permission data.",
+  "sections": [
+    {
+      "title": "Who we are",
+      "body": "VADI Fresh (\"VADI\", \"we\", \"us\") operates the VADI mobile app and delivers fresh produce and groceries from local farms and sellers to customers in Gujarat, India.\n\nContact: vadi.support@gmail.com · +91 99090 49699 · VADI Fresh, Ahmedabad, Gujarat, India."
+    },
+    {
+      "title": "What we collect",
+      "body": "Account details: your mobile number (verified by OTP), your name and an optional profile photo or date of birth if you add them.\n\nDelivery details: the addresses you save, the location you pick on the map and any delivery notes you type.\n\nOrders and payments: the products you order, order history, wallet balance and transactions, and payment status. Card and UPI details are handled by our payment partner (Razorpay) and are never stored on VADI servers.\n\nDevice information: a push-notification token and your platform (Android/iOS) so we can send order updates. Technical service and error logs may be generated when requests fail.\n\nSeller information: shop name, contact details, business location and seller sign-in credentials. If you use seller banking or payout features, the service also handles account holder name, bank account number, IFSC or UPI details for payouts. Seller passwords are stored as hashes."
+    },
+    {
+      "title": "Optional device permissions",
+      "body": "Location: with your permission, VADI uses your foreground location to help pick a delivery address. Delivery staff can choose Share my location to send coordinates to VADI and the customer tracking an assigned order. Background location tracking is not enabled.\n\nVoice search: only when you tap the microphone and grant permission, the device speech recognition provider processes your voice to produce search text. Depending on the device/provider, audio may be sent to that provider for recognition. VADI uses the resulting text to search products and does not intentionally store voice recordings. You can type instead and revoke microphone permission in device settings.\n\nPhotos: when you select a product image, VADI receives only the selected photo through the system picker and uploads it to show the product. Broad photo-library access is not required.\n\nNotifications: permission is optional. You can manage notifications in device settings."
+    },
+    {
+      "title": "How we use it",
+      "body": "• To create and secure your account and sign you in with OTP.\n• To accept, pack, deliver and track your orders, including sharing your name, phone and address with the rider and seller fulfilling that order.\n• To process payments, refunds and wallet credits.\n• To send order status notifications and, if you opt in, offers and announcements.\n• To provide customer support and resolve complaints.\n• To keep the service safe, prevent fraud and meet legal and tax obligations."
+    },
+    {
+      "title": "Who we share it with",
+      "body": "We never sell your personal data. We share only what is needed with:\n\n• Delivery staff and sellers – name, phone and address for the orders they handle.\n• Payment partners (Razorpay) – to process your payment.\n• SMS / notification providers – to deliver OTPs and order updates.\n• Cloud hosting providers that store our database and uploaded images.\n• Authorities, when required by Indian law."
+    },
+    {
+      "title": "How long we keep it",
+      "body": "We keep account data while your account is active. When deletion succeeds, we remove your login/profile, saved addresses, cart, wallet and wallet history, reviews, wishlist, support messages, personal notifications and seller profile. Seller products are removed from sale.\n\nExisting orders, invoices, payment and seller accounting records may be retained to meet legal, tax, fraud prevention and dispute obligations. Retained order records can contain the delivery name, phone and address snapshot captured at checkout. Account deletion does not cancel existing orders or settle refunds. Contact us to ask which retained records apply to you."
+    },
+    {
+      "title": "Your choices",
+      "body": "• Edit your name and addresses from Profile.\n• Turn off microphone, location or notifications in device settings. You can type searches and delivery addresses instead of using optional permissions.\n• Delete your account from Profile → About VADI → Delete account.\n• Request deletion without installing the app at https://vadi-backend.onrender.com/account-deletion. Verify your account phone number by SMS. If you cannot receive SMS or are delivery staff, contact vadi.support@gmail.com for an ownership-verified request.\n• Email vadi.support@gmail.com for privacy questions or a data-access request."
+    },
+    {
+      "title": "Children",
+      "body": "VADI is intended for adults aged 18 and above. We do not knowingly collect data from children. If you believe a child has created an account, contact us and we will remove it."
+    },
+    {
+      "title": "Security",
+      "body": "Production API traffic uses HTTPS. Access to account data requires a verified session. Payment credentials are processed by the payment provider. No system is perfectly secure: keep your phone locked and do not share SMS codes or passwords. Report suspected unauthorized access to vadi.support@gmail.com."
+    },
+    {
+      "title": "Returns and packaging",
+      "body": "Returns are accepted only if the items remain packed in their original, unopened packaging with all seals intact. Once the packaging has been opened or a seal has been broken, the items cannot be returned.\n\nFor eligible unopened items, submit a return request from My Orders within 24 hours of delivery. All return requests are subject to review."
+    },
+    {
+      "title": "Changes to this policy",
+      "body": "If we make material changes we will update the date at the top of this page and notify you in the app. Continuing to use VADI after a change means you accept the updated policy."
+    },
+    {
+      "title": "Contact us",
+      "body": "Questions or requests about your privacy:\n\nEmail: vadi.support@gmail.com\nPhone / WhatsApp: +91 99090 49699\nAddress: VADI Fresh, Ahmedabad, Gujarat, India"
+    }
+  ]
+}

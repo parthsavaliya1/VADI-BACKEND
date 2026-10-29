@@ -5,7 +5,7 @@ const Admin = require("../models/Admin");
 
 const router = express.Router();
 
-router.post("/register", async (req, res) => {
+router.post("/register", require("../middleware/adminMiddleware"), async (req, res) => {
   try {
     const { name, email, password } = req.body;
 

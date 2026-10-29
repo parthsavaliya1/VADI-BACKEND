@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 
 const DriverSchema = new mongoose.Schema(
   {
+    isDemo: { type: Boolean, default: false },
+    reviewPasswordHash: { type: String, select: false },
     phone: {
       type: String,
       required: true,

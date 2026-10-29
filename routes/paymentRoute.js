@@ -1,3 +1,4 @@
+const verifyCapturedPayment = require('../utils/verifyCapturedPayment');
 const express = require("express");
 const router = express.Router();
 const Payment = require("../models/Payment"); // Adjust path as needed
@@ -367,7 +368,7 @@ router.post("/verify-signature", async (req, res) => {
       });
     }
 
-    const payment = await razorpay.payments.fetch(razorpayPaymentId);
+    const payment = await verifyCapturedPayment({ orderId: razorpayOrderId, paymentId: razorpayPaymentId, signature: razorpaySignature, userId: req.auth.userId });
     if (payment?.status !== "captured" && payment?.status !== "authorized") {
       return res.status(400).json({
         success: false,

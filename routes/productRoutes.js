@@ -6,6 +6,10 @@ const mongoose = require("mongoose");
 
 /* ================= HELPER FUNCTIONS ================= */
 
+const normalizeVariantImages = (images) => Array.isArray(images)
+  ? [...new Set(images.filter((url) => typeof url === "string").map((url) => url.trim()).filter(Boolean))]
+  : [];
+
 // Generate unique slug from name
 const generateSlug = (name) => {
   return name
@@ -35,6 +39,8 @@ const validateVariants = (variants) => {
   variants.forEach((variant) => {
     variant.image =
       typeof variant.image === "string" ? variant.image.trim() : "";
+    variant.images = normalizeVariantImages(variant.images);
+    if (!variant.image) variant.image = variant.images[0] || "";
   });
 
   return variants;
@@ -480,6 +486,7 @@ router.post("/mine", async (req, res) => {
             price: salePrice,
             stock: qty,
             image: typeof variant.image === "string" ? variant.image : "",
+            images: normalizeVariantImages(variant.images),
             isDefault: Boolean(variant.isDefault),
             isActive: variant.isActive !== false,
           };
@@ -920,6 +927,7 @@ router.post("/:id/variants", async (req, res) => {
       isDefault,
       isActive,
       image,
+      images,
     } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -962,7 +970,8 @@ router.post("/:id/variants", async (req, res) => {
       stock,
       lowStockThreshold,
       sku,
-      image: typeof image === "string" ? image.trim() : "",
+      image: typeof image === "string" && image.trim() ? image.trim() : normalizeVariantImages(images)[0] || "",
+      images: normalizeVariantImages(images),
       isDefault: isDefault || false,
       isActive: isActive !== undefined ? isActive : true,
     });
@@ -1031,6 +1040,7 @@ router.put("/:id/variants/:variantId", async (req, res) => {
       isDefault,
       isActive,
       image,
+      images,
     } = req.body;
 
     if (packSize !== undefined) variant.packSize = packSize;
@@ -1042,6 +1052,10 @@ router.put("/:id/variants/:variantId", async (req, res) => {
       variant.lowStockThreshold = lowStockThreshold;
     if (sku !== undefined) variant.sku = sku;
     if (image !== undefined) variant.image = String(image || "").trim();
+    if (images !== undefined) {
+      variant.images = normalizeVariantImages(images);
+      if (image === undefined) variant.image = variant.images[0] || "";
+    }
     if (isActive !== undefined) variant.isActive = isActive;
 
     // Handle default variant

@@ -5,7 +5,7 @@ Set these in the backend deployment environment or its untracked `.env` file:
 ```env
 MONGO_URI=<your database connection string>
 ADMIN_NAME=Super Admin
-ADMIN_EMAIL=<your admin email>
+ADMIN_EMAIL=admin@vadi.app
 ADMIN_PASSWORD=<a unique password of at least 12 characters>
 ```
 

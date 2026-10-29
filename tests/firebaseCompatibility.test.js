@@ -1,0 +1,16 @@
+const {test,after}=require('node:test');
+const assert=require('node:assert/strict');
+const express=require('express');
+const {initializeApp,deleteApp}=require('firebase-admin/app');
+const {getRemoteConfig}=require('firebase-admin/remote-config');
+const app=initializeApp({projectId:'vadi-isolated-regression',credential:{async getAccessToken(){throw new Error('Network credentials must not be requested in this test');}}});
+const {ensureFirebaseApp,getFirebaseMessaging}=require('../config/firebaseAdmin');
+const rc=getRemoteConfig(app);
+const original=rc.getTemplate;
+rc.getTemplate=async()=>({parameters:{api_base_url:{defaultValue:{value:'https://example.test'}}}});
+const serverApp=express();serverApp.use(require('../routes/appConfigRoutes'));
+const server=serverApp.listen(0,'127.0.0.1');
+const ready=new Promise(resolve=>server.on('listening',resolve));
+test('Firebase Admin notifications use the supported modular API',()=>{assert.equal(ensureFirebaseApp(),app);assert.equal(typeof getFirebaseMessaging().send,'function');});
+test('Remote Config route reads its template using the modular API',async()=>{await ready;const response=await fetch('http://127.0.0.1:'+server.address().port+'/app-config');assert.equal(response.status,200);assert.equal((await response.json()).apiBaseUrl,'https://example.test');});
+after(async()=>{rc.getTemplate=original;await new Promise(resolve=>server.close(resolve));await deleteApp(app);});

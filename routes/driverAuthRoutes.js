@@ -12,6 +12,15 @@ const {
 } = require("../utils/twoFactorSms");
 
 const router = express.Router();
+const attempts = new Map();
+router.use((req, res, next) => {
+  if (!['/send-otp', '/verify-otp'].includes(req.path)) return next();
+  const now = Date.now();
+  for (const [key, entry] of attempts) if (entry.until < now) attempts.delete(key);
+  const entry = attempts.get(req.ip) || { count: 0, until: now + 15 * 60 * 1000 };
+  entry.count += 1; attempts.set(req.ip, entry);
+  return entry.count > 30 ? res.status(429).json({ error: 'Too many attempts. Try again later.' }) : next();
+});
 
 /**
  * POST /api/driver/send-otp
@@ -25,6 +34,7 @@ router.post("/send-otp", async (req, res) => {
     }
 
     const normalizedPhone = normalizePhone(phone);
+    if (!/^\+91[6-9]\d{9}$/.test(normalizedPhone)) return res.status(400).json({ error: "Enter a valid mobile number" });
     const driver = await Driver.findOne({ phone: normalizedPhone });
 
     if (!driver) {
@@ -38,14 +48,7 @@ router.post("/send-otp", async (req, res) => {
       return res.status(403).json({ success: false, error: "Account is inactive" });
     }
 
-    if (normalizedPhone === "+919080808080") {
-      driver.otp = "123456";
-      driver.otpSessionId = null;
-      driver.otpExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
-      driver.otpAttempts = 0;
-      await driver.save();
-      return res.json({ success: true, message: "Test code is 123456" });
-    }
+    if (driver.isDemo) return res.status(403).json({ error: 'Use Test account sign-in with the assigned credentials' });
 
     const bypassCooldown = forceResend === true || forceResend === "true";
     const stillValid =
@@ -110,6 +113,7 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ success: false, error: "OTP expired" });
     }
 
+    if (driver.isDemo || (driver.otpAttempts || 0) >= 5) return res.status(403).json({ error: 'Request a new OTP or use assigned test credentials' });
     let isValid = false;
     if (driver.otpSessionId) {
       isValid = await verify2factorSession(driver.otpSessionId, otp);

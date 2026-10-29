@@ -1,4 +1,5 @@
-const admin = require("firebase-admin");
+const { initializeApp, getApps, getApp, cert } = require("firebase-admin/app");
+const { getMessaging } = require("firebase-admin/messaging");
 
 let firebaseApp = null;
 
@@ -7,8 +8,8 @@ function ensureFirebaseApp() {
     return firebaseApp;
   }
 
-  if (admin.apps.length > 0) {
-    firebaseApp = admin.app();
+  if (getApps().length > 0) {
+    firebaseApp = getApp();
     return firebaseApp;
   }
 
@@ -22,8 +23,8 @@ function ensureFirebaseApp() {
     );
   }
 
-  firebaseApp = admin.initializeApp({
-    credential: admin.credential.cert({
+  firebaseApp = initializeApp({
+    credential: cert({
       projectId,
       clientEmail,
       privateKey,
@@ -35,7 +36,7 @@ function ensureFirebaseApp() {
 
 function getFirebaseMessaging() {
   const app = ensureFirebaseApp();
-  return admin.messaging(app);
+  return getMessaging(app);
 }
 
 module.exports = { getFirebaseMessaging, ensureFirebaseApp };

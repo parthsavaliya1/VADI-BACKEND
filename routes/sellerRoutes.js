@@ -588,6 +588,7 @@ router.post("/login", async (req, res) => {
         message: "No seller account for this phone. Apply from the Vadi app first.",
       });
     }
+    if (seller.isDemo) return res.status(403).json({ message: "Use Test account sign-in in the VADI app with your assigned credentials" });
     if (seller.status !== "approved" || !seller.isActive) {
       return res.status(403).json({
         success: false,
@@ -609,7 +610,7 @@ router.post("/login", async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: seller._id, userId: seller.user, role: "seller" },
+      { id: seller._id, userId: seller.user, role: "seller", demo: Boolean(seller.isDemo) },
       process.env.JWT_SECRET,
       { expiresIn: "7d" },
     );

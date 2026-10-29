@@ -1,0 +1,53 @@
+const {test,after}=require('node:test');
+const assert=require('node:assert/strict');
+const express=require('express');
+const bcrypt=require('bcryptjs');
+const jwt=require('jsonwebtoken');
+process.env.JWT_SECRET='isolated-auth-regression-secret-0123456789';
+const User=require('../models/User'), Driver=require('../models/Driver'), Seller=require('../models/Seller');
+const sms=require('../utils/twoFactorSms');
+const originals=[User.findOne,Driver.findOne,Seller.findOne,sms.dispatch2FactorOtpSms,sms.verify2factorSession];
+const uid='111111111111111111111111',did='333333333333333333333333',sid='444444444444444444444444';
+const customer={_id:uid,name:'Customer',phone:'+919876543210',status:'active',isDemo:false,isPhoneVerified:true,async save(){}};
+const driver={_id:did,name:'Driver',phone:'+919876543211',isActive:true,isDemo:false,async save(){}};
+let seller;
+User.findOne=async()=>customer;
+Driver.findOne=async()=>driver;
+Seller.findOne=()=>({select:async()=>seller});
+let sends=0;
+sms.dispatch2FactorOtpSms=async()=>{sends++;return {kind:'session',sessionId:'mock-sms-session'};};
+sms.verify2factorSession=async(session,otp)=>session==='mock-sms-session'&&otp==='654321';
+const app=express();app.use(express.json());
+app.use('/customer',require('../routes/authRoutes'));
+app.use('/driver',require('../routes/driverAuthRoutes'));
+app.use('/seller',require('../middleware/mobileAccess')('sellers'),require('../routes/sellerRoutes'));
+const server=app.listen(0,'127.0.0.1');
+const ready=new Promise(resolve=>server.on('listening',resolve));
+async function post(url,body){await ready;const response=await fetch('http://127.0.0.1:'+server.address().port+url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return {status:response.status,data:await response.json()};}
+test('normal customer still sends SMS and verifies OTP into a customer session',async()=>{
+ const before=sends;
+ assert.equal((await post('/customer/send-otp',{phone:customer.phone,mode:'login'})).status,200);
+ assert.equal(sends,before+1);
+ assert.equal((await post('/customer/verify-otp',{phone:customer.phone,otp:'000000'})).status,400);
+ const result=await post('/customer/verify-otp',{phone:customer.phone,otp:'654321'});
+ assert.equal(result.status,200);assert.equal(result.data.user._id,uid);
+ assert.equal(jwt.verify(result.data.token,process.env.JWT_SECRET).role,'customer');
+ assert.equal(result.data.user.otpSessionId,undefined);
+});
+test('normal driver still uses SMS OTP and receives the driver session',async()=>{
+ const before=sends;
+ assert.equal((await post('/driver/send-otp',{phone:driver.phone})).status,200);
+ assert.equal(sends,before+1);
+ assert.equal((await post('/driver/verify-otp',{phone:driver.phone,otp:'000000'})).status,400);
+ const result=await post('/driver/verify-otp',{phone:driver.phone,otp:'654321'});
+ assert.equal(result.status,200);assert.equal(result.data.driver.id,did);
+ assert.equal(jwt.verify(result.data.token,process.env.JWT_SECRET).role,'driver');
+});
+test('normal seller still signs in with password through the access middleware',async()=>{
+ seller={_id:sid,user:uid,name:'Shop',phone:'+919876543212',status:'approved',isActive:true,isDemo:false,passwordHash:await bcrypt.hash('seller-test-password',4)};
+ assert.equal((await post('/seller/login',{phone:seller.phone,password:'wrong'})).status,401);
+ const result=await post('/seller/login',{phone:seller.phone,password:'seller-test-password'});
+ assert.equal(result.status,200);assert.equal(result.data.seller.id,sid);
+ assert.equal(jwt.verify(result.data.token,process.env.JWT_SECRET).role,'seller');
+});
+after(async()=>{[User.findOne,Driver.findOne,Seller.findOne,sms.dispatch2FactorOtpSms,sms.verify2factorSession]=originals;await new Promise(resolve=>server.close(resolve));});

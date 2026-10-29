@@ -167,6 +167,9 @@ const ProductSchema = new mongoose.Schema(
           default: "",
         },
 
+        /** Ordered pack photos, e.g. front and back. image remains the cover. */
+        images: { type: [String], default: [] },
+
         /** Optional. When set and in the past, the pack cannot be added to a cart. */
         expiresAt: {
           type: Date,

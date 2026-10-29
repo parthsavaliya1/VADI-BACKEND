@@ -1,0 +1,22 @@
+const { test, after }=require('node:test');
+const assert=require('node:assert/strict');
+const crypto=require('crypto');
+process.env.RAZORPAY_KEY_ID='local-test-key';process.env.RAZORPAY_KEY_SECRET='local-test-secret';
+const modulePath=require.resolve('razorpay');require(modulePath);
+const original=require.cache[modulePath].exports;
+let order={id:'order_1',currency:'INR',amount:4000,notes:{userId:'customer_1'}};
+let payment={id:'payment_1',order_id:'order_1',currency:'INR',amount:4000,status:'captured'};
+let calls=0;
+require.cache[modulePath].exports=class { constructor(){this.orders={fetch:async()=>{calls++;return order;}};this.payments={fetch:async()=>{calls++;return payment;}};} };
+const verify=require('../utils/verifyCapturedPayment');
+const signature=crypto.createHmac('sha256',process.env.RAZORPAY_KEY_SECRET).update('order_1|payment_1').digest('hex');
+const params=()=>({orderId:'order_1',paymentId:'payment_1',signature,userId:'customer_1',amountInPaise:4000});
+test('captured payment must match signature, customer, gateway order and total',async()=>{assert.equal((await verify(params())).id,'payment_1');});
+test('bad or missing signature fails before contacting the gateway',async()=>{calls=0;await assert.rejects(verify({...params(),signature:'wrong'}));assert.equal(calls,0);});
+test('authorized but uncaptured payment cannot fulfill an order',async()=>{payment={...payment,status:'authorized'};await assert.rejects(verify(params()),/captured/);payment={...payment,status:'captured'};});
+test('different customer, gateway order, currency or amount is rejected',async()=>{
+ await assert.rejects(verify({...params(),userId:'someone_else'}),/belong/);
+ await assert.rejects(verify({...params(),amountInPaise:100}),/amount/);
+ payment={...payment,order_id:'another_order'};await assert.rejects(verify(params()),/belong/);payment={...payment,order_id:'order_1',currency:'USD'};await assert.rejects(verify(params()),/belong/);payment={...payment,currency:'INR'};
+});
+after(()=>{require.cache[modulePath].exports=original;});

@@ -1,27 +1,13 @@
-const jwt = require("jsonwebtoken");
-
-/** Bearer JWT with role === "driver" only */
-module.exports = function driverOnlyMiddleware(req, res, next) {
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ")
-    ? authHeader.slice(7).trim()
-    : authHeader.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).json({ success: false, message: "Authentication required" });
+const { handleReviewRequest } = require('../utils/reviewSandbox');
+const { authenticate } = require('./sessionAuth');
+module.exports = (req, res, next) => authenticate(req, res, async () => {
+  if (req.auth.role !== 'driver') return res.status(403).json({ message: 'Driver access required' });
+  req.driver = { id: req.auth.id };
+  // Demo drivers may view their own screen but cannot update real tracking or handovers.
+  if (req.auth.demo) {
+    try { if (await handleReviewRequest('driver', req, res)) return; }
+    catch { return res.status(503).json({ message: 'Demo sandbox temporarily unavailable' }); }
   }
-
-  let decoded;
-  try {
-    decoded = jwt.verify(token, process.env.JWT_SECRET);
-  } catch {
-    return res.status(401).json({ success: false, message: "Invalid or expired token" });
-  }
-
-  if (decoded.role !== "driver") {
-    return res.status(403).json({ success: false, message: "Driver access only" });
-  }
-
-  req.driver = { id: String(decoded.id) };
-  next();
-};
+  if (req.auth.demo && req.method !== 'GET') return res.status(403).json({ message: 'Live delivery changes are disabled for review accounts' });
+  return next();
+});
