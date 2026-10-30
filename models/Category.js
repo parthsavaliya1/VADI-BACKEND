@@ -52,7 +52,6 @@ const CategorySchema = new mongoose.Schema(
 );
 
 // Indexes
-CategorySchema.index({ slug: 1 });
 CategorySchema.index({ isActive: 1, sortOrder: 1 });
 
 module.exports = mongoose.model("Category", CategorySchema);
