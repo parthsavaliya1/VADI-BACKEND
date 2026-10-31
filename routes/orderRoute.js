@@ -35,6 +35,7 @@ const { notifyOrderStatus } = require("../utils/orderNotify");
 const { notifyLowStock } = require("../utils/lowStock");
 const { rewardReferralOnDelivery } = require("../utils/referralReward");
 const RepeatReminder = require("../models/RepeatReminder");
+const { validateReturnItems } = require("../utils/orderReturns");
 
 const RETURN_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -152,7 +153,7 @@ const reduceStock = async (items, session) => {
 /**
  * Restore stock (for cancellations/failures)
  */
-const restoreStock = async (items) => {
+const restoreStock = async (items, session = null) => {
   for (const item of items) {
     await Product.updateOne(
       {
@@ -162,6 +163,7 @@ const restoreStock = async (items) => {
       {
         $inc: { "variants.$.stock": item.quantity },
       },
+      { session },
     );
   }
 };
@@ -758,6 +760,12 @@ router.put("/:id/status", async (req, res) => {
       });
     }
 
+    if (status === "returned" || status === "cancelled") {
+      return res.status(400).json({ success: false, message: status === "returned"
+        ? "Use Admin Returns to approve a return and process its refund."
+        : "Use the Cancel Order action so stock and payment are handled correctly." });
+    }
+
     const order = await Order.findById(id).select("+deliveryHandoverCipher");
 
     if (!order) {
@@ -837,7 +845,6 @@ router.put("/:id/status", async (req, res) => {
             collectedAt: new Date(),
           },
         );
-        await settlePaidOrder(order._id);
       }
     }
 
@@ -850,6 +857,8 @@ router.put("/:id/status", async (req, res) => {
       new: true,
       runValidators: true,
     }).populate("items.product", "name image");
+
+    if (updatedOrder && status === "delivered" && order.payment.isCod) await settlePaidOrder(order._id);
 
     if (updatedOrder && prevStatus !== status) {
       await notifyOrderStatus(updatedOrder, status, { handoverCode: handoverPlain });
@@ -1190,43 +1199,19 @@ router.post("/:id/return", async (req, res) => {
       });
     }
 
-    const returnItems = [];
-    if (Array.isArray(items) && items.length) {
-      for (const requested of items) {
-        const line = order.items.find(
-          (item) => String(item.variantId) === String(requested.variantId),
-        );
-        const quantity = Number(requested.quantity || 0);
-        if (!line || quantity < 1 || quantity > line.quantity) {
-          return res.status(400).json({
-            success: false,
-            message: "Choose a valid item and quantity to return",
-          });
-        }
-        returnItems.push({
-          variantId: line.variantId,
-          quantity,
-          action: requested.action === "replace" ? "replace" : "refund",
-          productName: line.productName,
-        });
-      }
-    }
-
-    await Order.findByIdAndUpdate(id, {
-      returnRequest: {
-        status: "pending",
-        reason: note,
-        requestedAt: new Date(),
-        items: returnItems,
-        refundAmount: 0,
-        refundedTo: "none",
-      },
-    });
+    const returnItems = validateReturnItems(order, items);
+    const saved = await Order.findOneAndUpdate({ _id: id, status: "delivered", "returnRequest.status": { $exists: false } }, {
+      $set: { returnRequest: {
+        status: "pending", reason: note.slice(0, 1000), requestedAt: new Date(), items: returnItems,
+        refundAmount: 0, refundedTo: "none",
+      } },
+    }, { new: true, runValidators: true });
+    if (!saved) return res.status(409).json({ success: false, message: "Order changed or a return is already requested. Refresh and try again." });
     const updated = await Order.findById(id);
     res.json({ success: true, message: "Return request sent", data: updated });
   } catch (error) {
     console.error("Return request error:", error);
-    res.status(500).json({ success: false, message: "Failed to request return" });
+    res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : "Failed to request return" });
   }
 });
 

@@ -90,6 +90,7 @@ const PaymentSchema = new mongoose.Schema(
       reason: String,
       refundedAt: Date,
       gatewayRefundId: String,
+      destination: { type: String, enum: ["wallet", "original"] },
     },
 
     /* ================= META ================= */
@@ -118,7 +119,7 @@ PaymentSchema.index({ "gateway.orderId": 1 }, { sparse: true });
 PaymentSchema.pre("save", function () {
   if (this.method === "cod") {
     this.isCod = true;
-    this.status = "pending";
+    if (this.isNew && this.status === "initiated" && !this.codCollected) this.status = "pending";
   }
 });
 module.exports = mongoose.model("Payment", PaymentSchema);

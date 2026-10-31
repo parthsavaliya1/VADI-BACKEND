@@ -199,7 +199,7 @@ const OrderSchema = new mongoose.Schema(
 
       status: {
         type: String,
-        enum: ["pending", "paid", "failed", "refunded"],
+        enum: ["pending", "paid", "failed", "refunded", "cancelled"],
         default: "pending",
       },
 
@@ -266,6 +266,14 @@ const OrderSchema = new mongoose.Schema(
       index: true,
     },
 
+    statusHistory: [{
+      from: String, to: String, reason: String,
+      changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
+      changedAt: { type: Date, default: Date.now },
+      previousPaymentStatus: String, previousCodCollected: Boolean, codCollected: Boolean,
+      previousReturnRequest: mongoose.Schema.Types.Mixed,
+    }],
+
     cancelledAt: Date,
     cancelReason: String,
 
@@ -274,12 +282,19 @@ const OrderSchema = new mongoose.Schema(
     returnRequest: {
       status: {
         type: String,
-        enum: ["pending", "approved", "rejected"],
+        enum: ["pending", "processing", "approved", "rejected"],
       },
       reason: String,
       requestedAt: Date,
       resolvedAt: Date,
       adminNote: String,
+      resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
+      restocked: { type: Boolean, default: false },
+      refundStatus: { type: String, enum: ["processing", "pending", "processed", "failed", "none"] },
+      refundOperation: {
+        receipt: String, amount: Number, paymentId: String, adminNote: String, restock: Boolean,
+        gatewayRefundId: String, state: String, error: String,
+      },
       items: [
         {
           variantId: mongoose.Schema.Types.ObjectId,
@@ -423,7 +438,7 @@ OrderSchema.index({ user: 1, createdAt: -1 });
 OrderSchema.pre("save", async function () {
   if (this.payment.method === "cod") {
     this.payment.isCod = true;
-    this.payment.status = "pending";
+
   }
 });
 

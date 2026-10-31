@@ -748,78 +748,8 @@ router.post("/:id/failed", async (req, res) => {
  * @desc    Process payment refund
  * @access  Private (Admin)
  */
-router.post("/:id/refund", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { amount, reason, isPartial = false } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid payment ID format",
-      });
-    }
-
-    const payment = await Payment.findById(id);
-
-    if (!payment) {
-      return res.status(404).json({
-        success: false,
-        message: "Payment not found",
-      });
-    }
-
-    if (payment.status !== "success") {
-      return res.status(400).json({
-        success: false,
-        message: "Can only refund successful payments",
-      });
-    }
-
-    const refundAmount = amount || payment.amount;
-
-    if (refundAmount > payment.amount) {
-      return res.status(400).json({
-        success: false,
-        message: "Refund amount cannot exceed payment amount",
-      });
-    }
-
-    // Here you would process refund with payment gateway
-    const gatewayRefundId = `refund_${Date.now()}`; // Replace with actual gateway refund ID
-
-    // Update payment
-    payment.status = isPartial ? "partial_refund" : "refunded";
-    payment.refund = {
-      amount: refundAmount,
-      reason,
-      refundedAt: new Date(),
-      gatewayRefundId,
-    };
-
-    await payment.save();
-
-    // Update order
-    await Order.findByIdAndUpdate(payment.order, {
-      "payment.status": "refunded",
-    });
-    if (!isPartial) {
-      await reverseOrderCommission(payment.order);
-    }
-
-    res.json({
-      success: true,
-      message: "Refund processed successfully",
-      data: payment,
-    });
-  } catch (error) {
-    console.error("Process refund error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to process refund",
-      error: error.message,
-    });
-  }
+router.post("/:id/refund", (_req, res) => {
+  res.status(409).json({ success: false, message: "Use Admin Returns to approve a return and issue a recorded wallet refund. This legacy endpoint does not process refunds." });
 });
 
 /* ================= MARK COD AS COLLECTED ================= */

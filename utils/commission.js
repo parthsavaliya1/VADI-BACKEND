@@ -68,7 +68,8 @@ const settleOrderCommission = async (orderId) => {
   const settlements = [];
   for (const [sellerId, group] of grouped) {
     const seller = sellerById.get(sellerId);
-    const percent = rateForSeller(seller, defaultPercent);
+    const previous = order.settlements?.find((row) => String(row.sellerId) === sellerId);
+    const percent = previous ? normalizePercent(previous.commissionPercent, defaultPercent) : rateForSeller(seller, defaultPercent);
     settlements.push({
       sellerId,
       sellerName: seller?.name || group.sellerName,
@@ -101,7 +102,7 @@ const settleOrderCommission = async (orderId) => {
     await SellerLedger.updateOne(
       { order: order._id, seller: row.sellerId },
       {
-        $setOnInsert: {
+        $set: {
           order: order._id,
           orderNumber: order.orderNumber,
           seller: row.sellerId,

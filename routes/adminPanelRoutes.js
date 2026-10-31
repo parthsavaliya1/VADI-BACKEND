@@ -5,6 +5,7 @@ const Product = require("../models/Product");
 const Category = require("../models/Category");
 const Seller = require("../models/Seller");
 const Order = require("../models/Orders");
+const { reopenDeliveredOrder } = require("../utils/orderCorrections");
 const Payment = require("../models/Payment");
 const User = require("../models/User");
 const { decryptHandoverCode } = require("../utils/deliveryHandover");
@@ -16,7 +17,7 @@ const {
 const { readFeeSettings, DRIVER_FEE_MODES } = require("../utils/deliveryQuote");
 const { creditWallet } = require("../utils/wallet");
 const { reverseOrderCommission } = require("../utils/commission");
-const { refundRazorpayPayment } = require("../utils/razorpayRefund");
+const { quoteReturn, resolveOrderReturn } = require("../utils/orderReturns");
 const { notifyOrderStatus } = require("../utils/orderNotify");
 const SellerPayout = require("../models/SellerPayout");
 const SupportMessage = require("../models/SupportMessage");
@@ -381,24 +382,22 @@ router.get("/orders", async (req, res) => {
       ];
     }
 
-    const sort = { [sortBy]: sortOrder === "asc" ? 1 : -1 };
-    const skip = (Number(page) - 1) * Number(limit);
-
+    const pageNumber = Math.max(1, Math.floor(Number(page)) || 1);
+    const pageSize = Math.min(100, Math.max(1, Math.floor(Number(limit)) || 10));
+    const sortField = ["createdAt", "updatedAt", "orderNumber"].includes(sortBy) ? sortBy : "createdAt";
+    const direction = sortOrder === "asc" ? 1 : -1;
+    const sort = { [sortField]: direction, _id: direction };
+    const skip = (pageNumber - 1) * pageSize;
     const [orders, total] = await Promise.all([
-      Order.find(filter)
-        .populate("items.product", "name image")
-        .populate("user", "name email phone")
-        .sort(sort)
-        .limit(Number(limit))
-        .skip(skip)
-        .lean(),
+      Order.find(filter).populate("items.product", "name image").populate("user", "name email phone")
+        .sort(sort).skip(skip).limit(pageSize).lean(),
       Order.countDocuments(filter),
     ]);
 
     res.json({
       success: true,
       data: orders,
-      pagination: paginationOf(page, limit, total),
+      pagination: paginationOf(pageNumber, pageSize, total),
     });
   } catch (error) {
     console.error("Admin get orders error:", error);
@@ -450,6 +449,17 @@ router.get("/orders/:id", async (req, res) => {
       message: "Failed to fetch order",
       error: error.message,
     });
+  }
+});
+
+router.post("/orders/:id/reopen", async (req, res) => {
+  try {
+    const updated = await reopenDeliveredOrder({ ...req.body, id: req.params.id, adminId: req.auth?.id || req.admin?.id });
+    try { await notifyOrderStatus(updated, updated.status); }
+    catch (error) { console.error("Reopen notification failed:", error.message); }
+    res.json({ success: true, message: "Order reopened. Payment and delivery details have been updated.", data: updated });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message || "Could not reopen order" });
   }
 });
 
@@ -737,147 +747,31 @@ router.get("/returns", async (req, res) => {
       .sort({ "returnRequest.requestedAt": -1 })
       .limit(100)
       .lean();
-    res.json({ success: true, data: orders });
+    const data = await Promise.all(orders.map(async (order) => {
+      try {
+        const plan = quoteReturn(order);
+        const payment = await Payment.findOne({ order: order._id }).select("status").lean();
+        const paid = order.payment?.status === "paid" || payment?.status === "success";
+        return { ...order, refundPreview: { amount: paid ? plan.amount : 0, destination: paid && plan.amount > 0 ? (["upi", "card", "wallet"].includes(order.payment?.method) ? "original" : "wallet") : "none", fullRefund: plan.fullRefund } };
+      } catch (error) { return { ...order, refundPreview: { error: error.message } }; }
+    }));
+    res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: "Failed to load returns" });
   }
 });
 
 router.put("/returns/:id", async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
   try {
-    const { action, adminNote } = req.body;
-    if (!["approve", "reject"].includes(action)) {
-      await session.abortTransaction();
-      return res.status(400).json({ success: false, message: "Action must be approve or reject" });
-    }
-    const order = await Order.findById(req.params.id).session(session);
-    if (!order || order.returnRequest?.status !== "pending") {
-      await session.abortTransaction();
-      return res.status(404).json({ success: false, message: "Pending return not found" });
-    }
-
-    const note = String(adminNote || "").trim();
-    const requested = Array.isArray(order.returnRequest.items) ? order.returnRequest.items : [];
-    const stockLines = [];
-    let refundAmount = 0;
-    if (requested.length) {
-      for (const requestedItem of requested) {
-        const line = order.items.find(
-          (item) => String(item.variantId) === String(requestedItem.variantId),
-        );
-        if (!line) continue;
-        const quantity = Math.min(line.quantity, Number(requestedItem.quantity) || line.quantity);
-        stockLines.push({ product: line.product, variantId: line.variantId, quantity });
-        if (requestedItem.action !== "replace") {
-          refundAmount += (Number(line.subtotal) / line.quantity) * quantity;
-        }
-      }
-    } else {
-      refundAmount = order.grandTotal;
-      for (const line of order.items) {
-        stockLines.push({ product: line.product, variantId: line.variantId, quantity: line.quantity });
-      }
-    }
-    refundAmount = Math.min(order.grandTotal, Number(refundAmount.toFixed(2)));
-    const fullReturn =
-      !requested.length ||
-      (refundAmount >= order.grandTotal &&
-        stockLines.reduce((sum, line) => sum + line.quantity, 0) >=
-          order.items.reduce((sum, line) => sum + line.quantity, 0));
-
-    const patch = {
-      "returnRequest.adminNote": note,
-      "returnRequest.resolvedAt": new Date(),
-    };
-
-    if (action === "reject") {
-      patch["returnRequest.status"] = "rejected";
-      await Order.updateOne({ _id: order._id }, { $set: patch }, { session });
-      await session.commitTransaction();
-      await notifyOrderStatus(order, "returned");
-      return res.json({ success: true, message: "Return rejected" });
-    }
-
-    const paymentDoc = await Payment.findOne({ order: order._id }).session(session);
-    const razorpayPaymentId = order.payment?.transactionId || paymentDoc?.gateway?.paymentId;
-    const canRefund = refundAmount > 0 && order.payment?.status === "paid";
-    let refundedTo = "none";
-    let gatewayRefundId = null;
-    if (canRefund && ["upi", "card", "wallet"].includes(order.payment.method) && razorpayPaymentId) {
-      try {
-        gatewayRefundId = await refundRazorpayPayment(razorpayPaymentId, refundAmount);
-      } catch (error) {
-        console.error("Razorpay refund failed, using wallet:", error.message);
-      }
-    }
-    if (canRefund && gatewayRefundId) {
-      refundedTo = "original";
-    } else if (canRefund) {
-      await creditWallet({
-        userId: order.user,
-        amount: refundAmount,
-        reason: "refund",
-        orderId: order._id,
-        session,
-      });
-      refundedTo = "wallet";
-    }
-
-    if (refundedTo !== "none") {
-      if (fullReturn) patch["payment.status"] = "refunded";
-      patch["returnRequest.refundAmount"] = refundAmount;
-      patch["returnRequest.refundedTo"] = refundedTo;
-      await Payment.findOneAndUpdate(
-        { order: order._id },
-        {
-          status: fullReturn ? "refunded" : paymentDoc?.status || "success",
-          refund: {
-            amount: refundAmount,
-            reason: order.returnRequest.reason,
-            refundedAt: new Date(),
-            gatewayRefundId,
-          },
-        },
-        { session },
-      );
-    } else {
-      patch["returnRequest.refundedTo"] = "none";
-    }
-
-    patch["returnRequest.status"] = "approved";
-    if (fullReturn) patch.status = "returned";
-    await Order.updateOne({ _id: order._id }, { $set: patch }, { session });
-    for (const item of stockLines) {
-      await Product.updateOne(
-        { _id: item.product, "variants._id": item.variantId },
-        { $inc: { "variants.$.stock": item.quantity } },
-        { session },
-      );
-    }
-    await session.commitTransaction();
-    if (fullReturn && order.payment?.status === "paid") await reverseOrderCommission(order._id);
-    await notifyOrderStatus(order, "returned");
-    res.json({
-      success: true,
-      message:
-        refundedTo === "original"
-          ? "Return approved and refunded to the original payment"
-          : refundedTo === "wallet"
-            ? "Return approved and refunded to the customer wallet"
-            : "Return approved",
-      data: order,
-    });
+    const result = await resolveOrderReturn({ ...req.body, id: req.params.id, adminId: req.auth?.id || req.admin?.id });
+    try { if (!result.processing) await notifyOrderStatus(result.order, "returned"); }
+    catch (error) { console.error("Return notification failed:", error.message); }
+    res.json({ success: true, message: result.processing ? "Original-payment refund is pending at Razorpay. Use Resume refund to check its status; no wallet credit was issued." : result.action === "reject" ? "Return rejected. No refund or stock change was made."
+      : result.refundedTo === "original" ? `Return approved. ₹${result.refundAmount.toFixed(2)} refunded to the original payment method.`
+      : result.refundedTo === "wallet" ? `Return approved. ₹${result.refundAmount.toFixed(2)} credited to the customer VADI wallet.`
+      : "Return approved. No refund was due; arrange any approved replacement with the customer.", data: result.order });
   } catch (error) {
-    await session.abortTransaction();
-    console.error("Resolve return error:", error);
-    res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || "Failed to update return",
-    });
-  } finally {
-    session.endSession();
+    res.status(error.statusCode || 500).json({ success: false, message: error.message || "Could not resolve return" });
   }
 });
 
