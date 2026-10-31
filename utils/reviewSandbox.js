@@ -7,11 +7,12 @@ const Category = require('../models/Category');
 const id = () => String(new mongoose.Types.ObjectId());
 const now = () => new Date().toISOString();
 const deny = (res, text) => res.status(403).json({ success: false, message: text });
-async function getState() {
-  const existing = await ReviewSandbox.findById('play-review-v1');
+async function getState(userId) {
+  const sandboxId = `play-review-${userId}`;
+  const existing = await ReviewSandbox.findById(sandboxId);
   if (existing) return existing;
   const [user, category] = await Promise.all([
-    User.findOne({ phone: '+919990000101', isDemo: true }).lean(),
+    User.findOne({ _id: userId, isDemo: true }).lean(),
     Category.findOne({}).lean(),
   ]);
   if (!user) throw new Error('Create the review customer account first');
@@ -21,7 +22,7 @@ async function getState() {
   const product = { _id: id(), name: 'Demo tomatoes (test only)', description: 'Sample item in the review sandbox. No real product is published.', category: category?._id || id(), unit: 'kg', isActive: true, approvalStatus: 'approved', variants: [{ _id: id(), packSize: 1, packUnit: 'kg', price: 40, mrp: 50, stock: 100, isActive: true, isDefault: true }] };
   const item = { product: { _id: product._id, name: product.name }, productName: product.name, variantId: product.variants[0]._id, packSize: 1, packUnit: 'kg', unitPrice: 40, quantity: 1, subtotal: 40, seller: { sellerId: String(seller._id), sellerName: seller.name } };
   const sample = { _id: id(), user: String(user._id), orderNumber: 'DEMO-REVIEW-001', items: [item], totalItems: 1, totalQuantity: 1, subtotal: 40, totalDiscount: 0, taxAmount: 0, deliveryFee: 0, grandTotal: 40, status: 'out_for_delivery', payment: { method: 'cod', status: 'pending', isCod: true }, address: { addressId: id(), snapshot: { name: 'Demo Customer', phone: '9990000101', addressLine1: 'Demo delivery address', city: 'Rajkot', state: 'Gujarat', pincode: '360001' } }, assignedDriver: String(driver._id), deliveryHandoverCode: '246810', createdAt: now(), updatedAt: now(), isDemo: true, notes: 'Sandbox order: no delivery or charge' };
-  return ReviewSandbox.findOneAndUpdate({ _id: 'play-review-v1' }, { $setOnInsert: { data: { userId: String(user._id), sellerUserId: String(seller.user), sellerId: String(seller._id), driverId: String(driver._id), products: [product], orders: [sample], payments: [], wallet: 500, history: [], messages: [] } } }, { upsert: true, new: true });
+  return ReviewSandbox.findOneAndUpdate({ _id: sandboxId }, { $setOnInsert: { data: { userId: String(user._id), sellerUserId: String(seller.user), sellerId: String(seller._id), driverId: String(driver._id), products: [product], orders: [sample], payments: [], wallet: 500, history: [], messages: [] } } }, { upsert: true, new: true });
 }
 async function handleReviewRequest(kind, req, res) {
   if (!req.auth?.demo) return false;
@@ -32,7 +33,7 @@ async function handleReviewRequest(kind, req, res) {
   }
   const handledKinds = ['orders','payments','wallet','sellers','products','driver','support','addresses'];
   if (!handledKinds.includes(kind)) return false;
-  const doc = await getState(), state = doc.data;
+  const doc = await getState(a.userId), state = doc.data;
   const save = async () => { doc.markModified('data'); await doc.save(); };
   const ok = data => { res.json({ success: true, demo: true, data, message: 'Demo sandbox only — no live changes or charges' }); return true; };
   const fail = message => { res.status(400).json({ success: false, demo: true, message }); return true; };

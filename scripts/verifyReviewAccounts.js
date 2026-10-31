@@ -12,7 +12,7 @@ async function main() {
   const credentials = JSON.parse(fs.readFileSync(path.join(__dirname,'../.review-credentials.local.json'),'utf8'));
   await mongoose.connect(process.env.MONGO_URI,{serverSelectionTimeoutMS:15000});
   const app=express();app.use(express.json());
-  app.use('/api/auth',require('../routes/reviewAuthRoutes'));
+  app.use('/api/auth',require('../routes/authRoutes'));
   app.use('/sellers',access('sellers'),require('../routes/sellerRoutes'));
   app.use('/orders',access('orders'),require('../routes/orderRoute'));
   app.use('/wallet',access('wallet'),require('../routes/walletRoutes'));
@@ -26,8 +26,9 @@ async function main() {
   try {
     const sessions={};
     for(const [role,entry]of Object.entries({ user: credentials.user })) {
-      const session=await call('/api/auth/review-login',null,{role,login:entry.login,password:entry.password,privacyPolicyAccepted:true});
-      assert.ok(session.token);sessions[role]=session;console.log(`PASS ${entry.login}: no-OTP sign-in`);
+      await call('/api/auth/send-otp',null,{phone:entry.phone,mode:'login'});
+      const session=await call('/api/auth/verify-otp',null,{phone:entry.phone,otp:entry.otp,privacyPolicyAccepted:true});
+      assert.ok(session.token);sessions[role]=session;console.log(`PASS ${entry.phone}: standard phone/code sign-in`);
     }
     const customer=sessions.user;
     assert.ok((await call('/orders?userId='+customer.user._id,customer.token)).data.length);

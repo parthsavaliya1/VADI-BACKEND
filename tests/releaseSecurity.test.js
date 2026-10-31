@@ -2,7 +2,6 @@ const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
 process.env.JWT_SECRET = 'local-test-secret-not-for-deployment-0123456789';
 process.env.ENABLE_REVIEW_ACCOUNTS = 'true';
 const User = require('../models/User');
@@ -16,16 +15,15 @@ const ReviewSandbox = require('../models/ReviewSandbox');
 const access = require('../middleware/mobileAccess');
 const { adminOnly, customerToken, publicUser } = require('../middleware/sessionAuth');
 const uid='111111111111111111111111', other='222222222222222222222222', driverId='333333333333333333333333', shopId='444444444444444444444444';
-let demo=false, blocked=false, driverDemo=false, reviewAccount=null;
+let demo=false, blocked=false, driverDemo=false;
 const originals=[];
 function stub(Model, method, fn) { originals.push([Model,method,Model[method]]);Model[method]=fn; }
-stub(User,'findById',id=>({select:async()=>id===uid?{_id:uid,status:blocked?'blocked':'active',isDemo:demo}:null}));
+stub(User,'findById',id=>({select:async()=>id===uid?{_id:uid,status:blocked?'blocked':'active',isDemo:demo,phone:'+919990000101'}:null}));
 stub(Admin,'findById',()=>({select:async()=>null}));
 stub(Driver,'findById',id=>({select:async()=>id===driverId?{_id:driverId,isActive:true,isDemo:driverDemo}:null}));
 stub(Address,'findById',()=>({select:async()=>({user:other})}));
 stub(Order,'findById',()=>({select:async()=>({user:other,assignedDriver:other})}));
 stub(Seller,'findOne',async()=>({_id:shopId,user:uid,isDemo:demo,status:'approved',isActive:true}));
-stub(User,'findOne',()=>({select:async()=>reviewAccount}));
 const sandbox={data:{userId:uid,sellerUserId:other,sellerId:shopId,driverId,orders:[{_id:other,user:uid,orderNumber:'DEMO-001',deliveryHandoverCode:'246810',status:'out_for_delivery'}],products:[],payments:[],wallet:500,history:[],messages:[]},markModified(){},async save(){}};
 stub(ReviewSandbox,'findById',async()=>sandbox);
 stub(Cart,'findOne',()=>({lean:async()=>({items:[{product:other,quantity:1,unitPrice:40}],grandTotal:40,totalQuantity:1,subtotal:40})}));
@@ -35,7 +33,6 @@ for(const kind of ['users','addresses','orders','payments','wallet','cart','sell
  app.use('/'+kind,access(kind),(req,res)=>res.json({ok:true,userId:req.query.userId,body:req.body}));
 }
 app.post('/admin',adminOnly,(_req,res)=>res.json({ok:true}));
-app.use('/api/auth',require('../routes/reviewAuthRoutes'));
 app.use(require('../routes/publicPolicyRoutes'));
 const server=app.listen(0,'127.0.0.1');
 const ready=new Promise(resolve=>server.on('listening',resolve));
@@ -112,20 +109,8 @@ test('seller lookup rejects another shop ID',async()=>{
 test('legacy unverified payment and customer status endpoints are denied',async()=>{
  for(const path of ['/payments/verify','/payments/initiate','/orders/'+uid+'/verify-payment','/orders/'+uid+'/status'])assert.equal((await request(path,{token:token(),body:{}})).status,403,path);
 });
-test('review login requires credentials, consent and a dedicated demo account',async()=>{
- assert.equal((await request('/api/auth/review-login',{body:{role:'admin',login:'review-user',password:'x',privacyPolicyAccepted:true}})).status,401);
- for (const role of ['seller','driver','constructor','toString','__proto__']) assert.equal((await request('/api/auth/review-login',{body:{role,login:'review-user',password:'x',privacyPolicyAccepted:true}})).status,401);
- const body={role:'user',login:'review-user',password:'a-long-local-test-password',privacyPolicyAccepted:true};
- assert.equal((await request('/api/auth/review-login',{body:{...body,privacyPolicyAccepted:false}})).status,400);
- assert.equal((await request('/api/auth/review-login',{body})).status,401);
- reviewAccount={_id:uid,isDemo:true,status:'active',reviewPasswordHash:await bcrypt.hash(body.password,4),save:async()=>{},toObject(){return {_id:uid,isDemo:true,reviewPasswordHash:this.reviewPasswordHash,otp:'secret'};}};
- assert.equal((await request('/api/auth/review-login',{body:{...body,password:'wrong'}})).status,401);
- const result=await request('/api/auth/review-login',{body});assert.equal(result.status,200);
- const value=JSON.parse(result.body);assert.ok(value.token);assert.equal(value.user.reviewPasswordHash,undefined);assert.equal(value.user.otp,undefined);
- assert.equal(jwt.verify(value.token,process.env.JWT_SECRET).demo,true);
-});
 test('OTP fields and reviewer hashes never enter public user responses',()=>{
- assert.deepEqual(publicUser({_id:uid,otp:'secret',otpSessionId:'session',reviewPasswordHash:'hash'}),{_id:uid});
+ assert.deepEqual(publicUser({_id:uid,otp:'secret',otpSessionId:'session',reviewPasswordHash:'legacy',reviewOtpHash:'hash'}),{_id:uid});
 });
 test('public privacy/deletion pages are readable without an app or account and use CSP',async()=>{
  const result=await request('/account-deletion');assert.equal(result.status,200);assert.match(result.body,/SMS verification code/);assert.match(result.body,/retained/);

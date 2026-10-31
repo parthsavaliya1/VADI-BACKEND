@@ -1,3 +1,5 @@
+const bcrypt = require('bcryptjs');
+const { reviewAccessEnabled } = require('../utils/reviewAccess');
 const express = require("express");
 const User = require("../models/User");
 const {
@@ -52,7 +54,7 @@ router.post("/send-otp", async (req, res) => {
       return res.status(400).json({ error: "Phone is required" });
     }
 
-    let user = await User.findOne({ phone: normalizedPhone });
+    let user = await User.findOne({ phone: normalizedPhone }).select('+reviewOtpHash');
 
     // For login: DO NOT create placeholder users.
     // If user doesn't exist, return immediately.
@@ -72,7 +74,19 @@ router.post("/send-otp", async (req, res) => {
       user = await User.create({ phone: normalizedPhone });
     }
 
-    if (user.isDemo || user.status === 'blocked') return res.status(403).json({ error: 'Use assigned test credentials, or contact support for account access' });
+    if (user.status === 'blocked' || user.isActive === false) return res.status(403).json({ error: 'Account unavailable' });
+    if (user.isDemo) {
+      if (mode !== 'login' || !reviewAccessEnabled(user)) return res.status(403).json({ error: 'Review access is unavailable' });
+      // Reuse the challenge until it expires so resends cannot reset the attempt limit.
+      if (!user.otpExpiresAt || new Date(user.otpExpiresAt) <= new Date()) {
+        user.otpAttempts = 0;
+        user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
+      }
+      user.otp = null;
+      user.otpSessionId = null;
+      await user.save();
+      return res.json({ success: true });
+    }
     const bypassCooldown =
       forceResend === true ||
       forceResend === "true";
@@ -134,12 +148,12 @@ router.post("/verify-otp", async (req, res) => {
     }
 
     const normalizedPhone = normalizePhone(phone);
-    const user = await User.findOne({ phone: normalizedPhone });
+    const user = await User.findOne({ phone: normalizedPhone }).select('+reviewOtpHash');
 
     const hasChallenge =
       user &&
       user.otpExpiresAt &&
-      (user.otp || user.otpSessionId);
+      (user.otp || user.otpSessionId || (user.isDemo && user.reviewOtpHash));
 
     if (!hasChallenge || !user) {
       return res.status(400).json({ error: "OTP not found. Request again." });
@@ -149,13 +163,17 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ error: "OTP expired" });
     }
 
-    if (user.isDemo || user.status === 'blocked') return res.status(403).json({ error: 'Account unavailable for OTP sign-in' });
+    if (user.status === 'blocked' || user.isActive === false) return res.status(403).json({ error: 'Account unavailable' });
+    if (user.isDemo && !reviewAccessEnabled(user)) return res.status(403).json({ error: 'Review access is unavailable' });
+    if (user.isDemo && privacyPolicyAccepted !== true) return res.status(400).json({ error: 'Please read and accept the privacy policy' });
     if ((user.otpAttempts || 0) >= 5) return res.status(429).json({ error: 'Too many incorrect codes. Request a new OTP after expiry.' });
     let isValid = false;
-    if (user.otpSessionId) {
+    if (user.isDemo) {
+      isValid = typeof otp === 'string' && /^\d{6}$/.test(otp) && await bcrypt.compare(otp, user.reviewOtpHash);
+    } else if (user.otpSessionId) {
       isValid = await verify2factorSession(user.otpSessionId, otp);
     }
-    if (!isValid) {
+    if (!isValid && !user.isDemo) {
       isValid = enteredOtpMatchesStored(user.otp, otp);
     }
 
@@ -197,7 +215,6 @@ router.post("/verify-otp", async (req, res) => {
   }
 });
 
-// Removed phone-only demo bypass; dedicated credentials are handled by reviewAuthRoutes.
 /**
  * POST /api/auth/signup
  * Body: { name, phone, profileImage?, role? }
@@ -211,7 +228,7 @@ router.post("/signup", authenticate, async (req, res) => {
     }
 
     const normalizedPhone = normalizePhone(phone);
-    const user = await User.findOne({ phone: normalizedPhone });
+    const user = await User.findOne({ phone: normalizedPhone }).select('+reviewOtpHash');
 
     if (!user) {
       return res.status(400).json({ error: "OTP not verified" });

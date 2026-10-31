@@ -69,7 +69,7 @@ const mobileAccess = require('./middleware/mobileAccess');
 const { adminOnly } = require('./middleware/sessionAuth');
 const publicReadAdminWrite = (req, res, next) => ['GET','HEAD','OPTIONS'].includes(req.method) ? next() : adminOnly(req, res, next);
 app.use(require('./routes/publicPolicyRoutes'));
-app.use('/api/auth', require('./routes/reviewAuthRoutes'));
+
 app.use('/api/uploads', mobileAccess('uploads'), uploadRoutes);
 app.use("/products", mobileAccess('products'), productRoutes);
 app.use("/categories", publicReadAdminWrite, categoryRoutes);
@@ -87,6 +87,7 @@ app.use("/wishlist", mobileAccess('wishlist'), wishlistRoutes);
 app.use("/support", mobileAccess('support'), supportRoutes);
 app.use("/reviews", mobileAccess('reviews'), reviewRoute);
 app.use("/sellers", mobileAccess('sellers'), sellerRoutes);
+app.use("/api/admin/reviewers", require("./routes/adminReviewerRoutes"));
 app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin", adminPanelRoutes);

@@ -1,6 +1,6 @@
 # Play review access and release verification
 
-One customer demo account is supported. Normal customers and drivers use SMS OTP; sellers keep their password login. The review account uses a username/password without SMS. Fixed production OTP bypasses are removed.
+Multiple customer reviewer accounts are supported through the admin panel. Normal customers and drivers use SMS OTP; sellers keep their password login. The reserved demo customer uses the same phone-number and OTP screens with a reusable six-digit review code. Regular customers still require SMS OTP. Reviewer accounts managed in Admin → Reviewer Accounts use per-account enable/disable controls and never grant access to real customer accounts. ENABLE_REVIEW_ACCOUNTS only controls the legacy seeded account until an admin explicitly sets its access.
 
 ## Test files
 
@@ -8,13 +8,21 @@ Keep the regression tests. They are development checks, not app screens or produ
 
 Backend coverage includes normal customer/driver OTP, seller password login, payment verification, account isolation, review access and Firebase compatibility. App coverage includes saved sessions, expiry, driver/customer separation, wrong demo credentials, temporary server failures, delayed failures after a newer login, and development/production API selection. The tests use mock SMS/payment services and do not send SMS or charge money.
 
-## Demo account
+## Manage reviewer accounts in admin
 
-Run `npm run create:review-accounts` using the intended database. It creates/updates only the reserved demo customer and refuses to overwrite an existing real account. Credentials are stored in the ignored `.review-credentials.local.json` file. Existing old demo seller/driver records are not deleted, but the review-login endpoint no longer accepts those roles.
+Deploy the matching backend and admin changes, then open **Admin → Reviewer Accounts**. Add a reviewer name, an unused Indian mobile number, and a six-digit code. Set **Reviewer access enabled** and save. Existing reviewer accounts appear in the list: edit them to set a new code and enable access, including migration from the old password-based account. Normal customer accounts cannot be converted or overwritten. Codes are hashed and cannot be viewed again; keep the assigned code for Play Console instructions.
+
+Use **Disable** to block both new sign-ins and existing sessions immediately. **Enable** restores access. No environment changes or setup script are needed for accounts configured in admin. Each reviewer has separate sandbox orders, payments and wallet data.
+
+If phone login still returns “Use assigned test credentials”, the app is reaching an old backend. Deploy this backend to the service selected by the app's Firebase API URL, and ensure the admin panel API URL targets that same service. Merely deploying the admin page cannot change the login handler.
+
+## Optional command-line demo account setup
+
+Run `npm run create:review-accounts` using the intended database. It creates/updates only the reserved demo customer and refuses to overwrite an existing real account. Credentials are stored in the ignored `.review-credentials.local.json` file. The file contains user.phone and user.otp. Set REVIEW_USER_OTP to choose the six-digit code, or let the script generate it. Re-run this command to migrate the previous username/password account; existing demo seller/driver records are unchanged.
 
 Run `npm run verify:review-accounts` to exercise the local revised server against the configured database. Demo login, wallet/orders and cross-account isolation were verified successfully. This is not a deployed-server test.
 
-For Play Console App access, use username `review-user` and the user password from the local credentials file. Instructions: Open customer login, choose **Test account sign-in (no OTP)**, enter the credentials, accept the privacy policy, and tap **Sign in without OTP**. No SMS or location permission is needed for this sign-in. Payments/orders use the labelled sandbox; no real charge or delivery is created.
+For Play Console App access, use the phone number and six-digit code from the local credentials file. Instructions: Open customer login, enter the phone number (without +91), accept the privacy policy, tap **Continue**, then enter the assigned code on the OTP screen and verify. No SMS or location permission is needed for this sign-in. Payments/orders use the labelled sandbox; no real charge or delivery is created.
 
 The customer demo does not grant driver/seller login. If Google needs to review those restricted roles, provide separately authorized test access. Google requires reusable credentials and access to restricted functionality: https://support.google.com/googleplay/android-developer/answer/15748846 .
 
@@ -42,7 +50,7 @@ The customer demo does not grant driver/seller login. If Google needs to review 
 
 The live Render root returned 200, but both `/privacy-policy` and `/account-deletion` returned **404**. Those routes pass local tests and need deployment. No production deployment or Play submission was performed.
 
-The revised backend requires **Node 22 or newer**, declared in `package.json` and `.nvmrc`. Firebase Admin now uses its supported modular APIs. Keep the existing `JWT_SECRET` stable. Supply database/SMS/payment/Firebase secrets in the deployment environment, and set `ENABLE_REVIEW_ACCOUNTS=true` for reviewer access. Do not commit local credentials.
+The revised backend requires **Node 22 or newer**, declared in `package.json` and `.nvmrc`. Firebase Admin now uses its supported modular APIs. Keep the existing `JWT_SECRET` stable. Supply database/SMS/payment/Firebase secrets in the deployment environment, and configure reviewer access in Admin → Reviewer Accounts. `ENABLE_REVIEW_ACCOUNTS=true` is only needed for an unconfigured legacy seeded reviewer. Do not commit local credentials.
 
 Coordinate the app/backend rollout. The new protected backend endpoints require a session token. Older installed app versions that do not store/send that token are incompatible with the new backend; merely deploying the backend will not migrate them. After installing the updated app, legacy customers without a session token need OTP sign-in once. Never silently exchange a stored user ID for an authenticated token.
 

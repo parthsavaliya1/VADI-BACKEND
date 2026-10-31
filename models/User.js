@@ -3,7 +3,9 @@ const mongoose = require("mongoose");
 const UserSchema = new mongoose.Schema(
   {
     isDemo: { type: Boolean, default: false },
-    reviewPasswordHash: { type: String, select: false },
+    reviewPasswordHash: { type: String, select: false }, // Legacy field removed by review account migration.
+    reviewEnabled: { type: Boolean, default: undefined },
+    reviewOtpHash: { type: String, select: false },
     name: {
       type: String,
       trim: true,

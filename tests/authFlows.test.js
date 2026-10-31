@@ -11,7 +11,7 @@ const uid='111111111111111111111111',did='333333333333333333333333',sid='4444444
 const customer={_id:uid,name:'Customer',phone:'+919876543210',status:'active',isDemo:false,isPhoneVerified:true,async save(){}};
 const driver={_id:did,name:'Driver',phone:'+919876543211',isActive:true,isDemo:false,async save(){}};
 let seller;
-User.findOne=async()=>customer;
+User.findOne=()=>({select:async()=>customer});
 Driver.findOne=async()=>driver;
 Seller.findOne=()=>({select:async()=>seller});
 let sends=0;
