@@ -61,6 +61,7 @@ router.get("/", async (req, res) => {
       title: n.title,
       body: n.body,
       imageUrl: n.imageUrl || "",
+      searchQuery: n.searchQuery || "",
       createdAt: n.createdAt,
       updatedAt: n.updatedAt,
       read: readSet.has(String(n._id)),

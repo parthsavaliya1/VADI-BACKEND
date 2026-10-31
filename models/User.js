@@ -71,6 +71,15 @@ const UserSchema = new mongoose.Schema(
       type: Date,
     },
 
+    searchHistory: {
+      type: [new mongoose.Schema({
+        query: String, key: String, searchedAt: Date, lastNotifiedAt: Date,
+      }, { _id: false })],
+      default: [],
+    },
+    searchNotificationsEnabled: { type: Boolean, default: true },
+    lastSearchNotificationAt: { type: Date, default: null },
+
     pushToken: {
       type: String,
       default: null,

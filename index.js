@@ -34,6 +34,7 @@ const wishlistRoutes = require("./routes/wishlistRoutes");
 const supportRoutes = require("./routes/supportRoutes");
 const { runDueReminders } = require("./utils/repeatReminders");
 
+const { runSearchNotifications } = require("./utils/searchNotifications");
 const app = express();
 app.set("trust proxy", 1);
 
@@ -104,6 +105,7 @@ app.use(
       : res.status(405).json({ success: false, message: "Method not allowed" }),
   appThemeRoutes
 );
+app.use("/search-history", require("./routes/searchHistoryRoutes"));
 app.use("/notifications", mobileAccess('notifications'), notificationRoutes);
 app.use("/api/driver", driverAuthRoutes);
 
@@ -124,6 +126,10 @@ async function start() {
       : "Razorpay key missing",
   );
   runDueReminders().catch((error) => console.error("Repeat reminder error:", error.message));
+  runSearchNotifications().catch((error) => console.error("Search alerts:", error.message));
+  setInterval(() => {
+    runSearchNotifications().catch((error) => console.error("Search alerts:", error.message));
+  }, 60 * 60 * 1000);
   setInterval(() => {
     runDueReminders().catch((error) => console.error("Repeat reminder error:", error.message));
   }, 15 * 60 * 1000);

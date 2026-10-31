@@ -12,6 +12,7 @@ const NotificationSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    searchQuery: { type: String, default: "" },
     imageUrl: {
       type: String,
       trim: true,
@@ -42,7 +43,7 @@ const NotificationSchema = new mongoose.Schema(
     },
     kind: {
       type: String,
-      enum: ["broadcast", "order", "stock", "support", "reminder", "referral"],
+      enum: ["broadcast", "order", "stock", "support", "reminder", "referral", "search"],
       default: "broadcast",
     },
   },
