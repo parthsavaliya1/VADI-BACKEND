@@ -43,6 +43,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:4173",
   "https://vadi-admin.onrender.com",
+  "https://productadmin.vadindia.com",
   ...(process.env.CORS_ORIGINS || "")
     .split(",")
     .map((origin) => origin.trim())

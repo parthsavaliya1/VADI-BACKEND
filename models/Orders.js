@@ -417,7 +417,6 @@ const OrderSchema = new mongoose.Schema(
 /* ================= INDEXES ================= */
 
 OrderSchema.index({ user: 1, createdAt: -1 });
-OrderSchema.index({ status: 1 });
 
 /* ================= COD AUTO HANDLING ================= */
 

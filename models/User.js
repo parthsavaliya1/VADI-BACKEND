@@ -135,7 +135,6 @@ const UserSchema = new mongoose.Schema(
 );
 
 // Indexes
-UserSchema.index({ phone: 1 });
 UserSchema.index({ role: 1, status: 1 });
 
 module.exports = mongoose.model("User", UserSchema);

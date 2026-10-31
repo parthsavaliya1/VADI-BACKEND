@@ -69,7 +69,6 @@ const AddressSchema = new mongoose.Schema(
 );
 
 // Indexes
-AddressSchema.index({ user: 1 });
 
 // CRITICAL FIX: Use sparse index for location
 // This allows documents without location field to exist
