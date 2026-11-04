@@ -43,6 +43,9 @@ const allowedOrigins = [
   "http://localhost:3002",
   "http://localhost:5173",
   "http://localhost:4173",
+  "https://vadindia.com",
+  "https://api.product.vadindia.com",
+  "https://www.vadindia.com",
   "https://vadi-admin.onrender.com",
   "https://productadmin.vadindia.com",
   ...(process.env.CORS_ORIGINS || "")
