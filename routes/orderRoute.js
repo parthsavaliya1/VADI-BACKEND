@@ -195,7 +195,6 @@ router.post("/", async (req, res) => {
       addressId,
       paymentMethod,
       paymentDetails,
-      deliverySlot,
       notes,
     } = req.body;
 
@@ -322,10 +321,8 @@ router.post("/", async (req, res) => {
     if (paymentMethod !== 'cod' && paymentMethod !== 'balance') {
       await verifyCapturedPayment({ orderId: paymentDetails.razorpayOrderId, paymentId: paymentDetails.razorpayPaymentId, signature: paymentDetails.razorpaySignature, userId, amountInPaise: Math.round(grandTotal * 100) });
     }
-    const quotedSlot =
-      deliverySlot?.date && deliverySlot?.slot
-        ? deliverySlot
-        : quoteDeliverySlot();
+    // The server owns the deadline; legacy clients must not override the 48-hour policy.
+    const quotedSlot = quoteDeliverySlot();
 
     // Create order
     const order = new Order({

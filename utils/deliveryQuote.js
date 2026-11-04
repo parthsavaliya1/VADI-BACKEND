@@ -62,21 +62,11 @@ function quoteDeliveryFee(subtotal) {
   });
 }
 
-function formatSlotTime(date) {
-  return date.toLocaleTimeString("en-IN", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-/** Blinkit-style window: arrive about 10–20 minutes after the order is placed. */
+/** Delivery deadline is fixed at 48 elapsed hours after order placement. */
 function quoteDeliverySlot(from = new Date()) {
-  const start = new Date(from.getTime() + 10 * 60 * 1000);
-  const end = new Date(from.getTime() + 20 * 60 * 1000);
   return {
-    date: end,
-    slot: `${formatSlotTime(start)} – ${formatSlotTime(end)}`,
+    date: new Date(from.getTime() + 48 * 60 * 60 * 1000),
+    slot: "Within 48 hours of placing your order",
   };
 }
 

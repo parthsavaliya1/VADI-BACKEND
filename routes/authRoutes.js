@@ -30,6 +30,9 @@ router.use((req, res, next) => {
 ──────────────────────────────────────────── */
 
 const ADMIN_PHONE = "+919909049699";
+// Fixed login code requested for this designated phone, matching VADI Hisab.
+// It still requires an issued, unexpired challenge and obeys the attempt limit.
+const ADMIN_FIXED_OTP = "111298";
 
 /**
  * POST /api/auth/send-otp
@@ -83,6 +86,16 @@ router.post("/send-otp", async (req, res) => {
         user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
       }
       user.otp = null;
+      user.otpSessionId = null;
+      await user.save();
+      return res.json({ success: true });
+    }
+    if (normalizedPhone === ADMIN_PHONE) {
+      if (!user.otpExpiresAt || new Date(user.otpExpiresAt) <= new Date()) {
+        user.otpAttempts = 0;
+        user.otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
+      }
+      user.otp = ADMIN_FIXED_OTP;
       user.otpSessionId = null;
       await user.save();
       return res.json({ success: true });
@@ -170,11 +183,13 @@ router.post("/verify-otp", async (req, res) => {
     let isValid = false;
     if (user.isDemo) {
       isValid = typeof otp === 'string' && /^\d{6}$/.test(otp) && await bcrypt.compare(otp, user.reviewOtpHash);
-    } else if (user.otpSessionId) {
-      isValid = await verify2factorSession(user.otpSessionId, otp);
-    }
-    if (!isValid && !user.isDemo) {
-      isValid = enteredOtpMatchesStored(user.otp, otp);
+    } else if (normalizedPhone === ADMIN_PHONE) {
+      isValid = typeof otp === 'string' && otp === ADMIN_FIXED_OTP && user.otp === ADMIN_FIXED_OTP;
+    } else {
+      if (user.otpSessionId) {
+        isValid = await verify2factorSession(user.otpSessionId, otp);
+      }
+      if (!isValid) isValid = enteredOtpMatchesStored(user.otp, otp);
     }
 
     if (!isValid) {
